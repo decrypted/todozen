@@ -1,8 +1,15 @@
 node_modules
 dist
 build
+
+# Compiled JS (from TypeScript)
 extension.js
 manager.js
-utils.js
+history.js
+prefs.js
+
+# Generated files
+build-info.json
+schemas/gschemas.compiled
+
 yarn.lock
-features.md

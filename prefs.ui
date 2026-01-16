@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<interface>
+  <requires lib="gtk" version="4.0"/>
+  <requires lib="libadwaita" version="1.4"/>
+  <object class="AdwPreferencesPage" id="main-page">
+    <child>
+      <object class="AdwPreferencesGroup">
+        <property name="title" translatable="yes">Appearance</property>
+        <child>
+          <object class="AdwActionRow">
+            <property name="title" translatable="yes">Panel position</property>
+            <property name="subtitle" translatable="yes">Where to show the TodoZen button</property>
+            <child>
+              <object class="GtkBox" id="position-box">
+                <property name="halign">center</property>
+                <property name="valign">center</property>
+                <property name="css-classes">linked</property>
+                <child>
+                  <object class="GtkToggleButton" id="position-left">
+                    <property name="label">◂</property>
+                    <property name="tooltip-text">Left</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="position-center-left">
+                    <property name="label">◃</property>
+                    <property name="tooltip-text">Center Left</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="position-center">
+                    <property name="label">▮</property>
+                    <property name="tooltip-text">Center</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="position-center-right">
+                    <property name="label">▹</property>
+                    <property name="tooltip-text">Center Right</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="position-right">
+                    <property name="label">▸</property>
+                    <property name="tooltip-text">Right</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwPreferencesGroup" id="groups-group">
+        <property name="title" translatable="yes">Groups</property>
+        <property name="description" translatable="yes">Organize tasks into groups (max 10)</property>
+        <child>
+          <object class="GtkListBox" id="groups-list">
+            <property name="selection-mode">none</property>
+            <property name="css-classes">boxed-list</property>
+          </object>
+        </child>
+        <child>
+          <object class="GtkButton" id="add-group-btn">
+            <property name="label" translatable="yes">Add Group</property>
+            <property name="halign">start</property>
+            <property name="margin-top">12</property>
+            <property name="css-classes">suggested-action</property>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwPreferencesGroup">
+        <property name="title" translatable="yes">Data</property>
+        <child>
+          <object class="AdwSwitchRow" id="enable-history">
+            <property name="title" translatable="yes">Enable history</property>
+            <property name="subtitle" translatable="yes">Log task actions to ~/.config/todozen/history.jsonl</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwActionRow" id="clear-all-row">
+            <property name="title" translatable="yes">Clear all tasks</property>
+            <property name="subtitle" translatable="yes">Permanently delete all tasks</property>
+            <child>
+              <object class="GtkButton" id="clear-all-btn">
+                <property name="label" translatable="yes">Clear All</property>
+                <property name="valign">center</property>
+                <property name="css-classes">destructive-action</property>
+              </object>
+            </child>
+          </object>
+        </child>
+      </object>
+    </child>
+    <child>
+      <object class="AdwPreferencesGroup">
+        <property name="title" translatable="yes">About</property>
+        <child>
+          <object class="AdwActionRow" id="version-row">
+            <property name="title" translatable="yes">Version</property>
+            <property name="subtitle">-</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwActionRow" id="build-time-row">
+            <property name="title" translatable="yes">Build time</property>
+            <property name="subtitle">-</property>
+          </object>
+        </child>
+      </object>
+    </child>
+  </object>
+</interface>

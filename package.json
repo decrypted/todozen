@@ -1,6 +1,6 @@
 {
   "name": "todozen",
-  "version": "3.0.0",
+  "version": "3.1.0",
   "description": "A simple GNOME todo list extension (forked and enhanced as TodoZen)",
   "main": "extension.js",
   "repository": "git@github.com:Irtesaam/todozen.git",
@@ -8,7 +8,12 @@
   "author": "Irtesaam <atfimdirtesaam@gmail.com>",
   "license": "MIT",
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint src/",
+    "lint:fix": "eslint src/ --fix",
+    "check": "tsc --noEmit && eslint src/"
   },
   "devDependencies": {
     "@eslint/js": "^9.14.0",
@@ -16,7 +21,8 @@
     "eslint-plugin-jsdoc": "^50.4.3",
     "globals": "^15.12.0",
     "typescript": "^5.6.3",
-    "typescript-eslint": "^8.14.0"
+    "typescript-eslint": "^8.14.0",
+    "vitest": "^4.0.17"
   },
   "dependencies": {
     "@girs/gjs": "^4.0.0-beta.16",

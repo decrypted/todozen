@@ -9,10 +9,10 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { Task, TodoListManager } from "./manager.js";
-import { isEmpty } from "./utils.js";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
 import GLib from "gi://GLib";
+import Gio from "gi://Gio";
 
 const MAX_WINDOW_WIDTH = 500;
 const MAX_INPUT_CHARS = 200;
@@ -21,34 +21,103 @@ const buttonIcon = (total: number) => _(`(✔${total})`);
 export default class TodoListExtension extends Extension {
     _indicator?: PanelMenu.Button | null;
     _manager!: TodoListManager | null;
+    _settings?: Gio.Settings | null;
+    _positionChangedId?: number | null;
     mainBox?: St.BoxLayout | null;
     todosBox!: St.BoxLayout | null;
     scrollView?: St.ScrollView | null;
     buttonText!: St.Label | null;
     input?: St.Entry | null;
     button!: PanelMenu.Button | null;
-    clearAllBtn?: St.Button | null;
     _activeConfirmation?: PopupMenu.PopupMenuItem | null;
-    _activeConfirmationTimeoutId?: number | null;
     _confirmationTimeoutId: number | null = null;
+    _filterDropdown?: St.Button | null;
+    _groupDropdown?: St.Button | null;
+    _selectedGroupId: string = 'inbox';
+    _expandedGroups: Set<string> = new Set();
+    _menuOpenStateId?: number | null;
+    _needsPopulate: boolean = true;
+    _groupsChangedId?: number | null;
+    _todosChangedId?: number | null;
 
     enable() {
+        this._settings = this.getSettings();
         this.button = new PanelMenu.Button(0.0, this.metadata.name, false);
         this._manager = new TodoListManager(this);
-        const totalTodos = this._manager.getTotalUndone();
 
         this.buttonText = new St.Label({
-            text: buttonIcon(totalTodos),
+            text: buttonIcon(this._manager.getTotalUndone()),
             y_align: Clutter.ActorAlign.CENTER,
         });
         this.buttonText.set_style("text-align:center;");
         this.button.add_child(this.buttonText);
         this._indicator = this.button;
-        Main.panel.addToStatusArea(this.uuid, this._indicator);
-        // Create a PopupMenu for the button
+
+        // Add to panel at configured position
+        this._addToPanel();
+
+        // Listen for position changes
+        this._positionChangedId = this._settings.connect('changed::panel-position', () => {
+            this._repositionButton();
+        });
+
         this._buildPopupMenu();
-        this._populate();
         this._toggleShortcut();
+
+        // Listen for settings changes from prefs (e.g., group reorder, clear all)
+        this._needsPopulate = true;
+        this._groupsChangedId = this._settings.connect('changed::groups', () => {
+            this._needsPopulate = true;
+        });
+        this._todosChangedId = this._settings.connect('changed::todos', () => {
+            this._needsPopulate = true;
+            // Also update button count
+            this.buttonText?.set_text(buttonIcon(this._manager?.getTotalUndone() || 0));
+        });
+
+        // Populate todo list when menu opens (only if needed)
+        // @ts-expect-error - open-state-changed signal exists but types don't include it
+        this._menuOpenStateId = this.button.menu.connect('open-state-changed', (_menu: unknown, isOpen: boolean) => {
+            if (isOpen && this._needsPopulate) {
+                this._populate();
+                this._needsPopulate = false;
+            }
+        });
+    }
+
+    _getPositionConfig() {
+        const position = this._settings?.get_string('panel-position') || 'right';
+        // Map position setting to panel box and index
+        const config: { [key: string]: { box: string; index: number } } = {
+            'left':         { box: 'left',   index: 0 },
+            'center-left':  { box: 'center', index: 0 },
+            'center':       { box: 'center', index: 1 },
+            'center-right': { box: 'center', index: 2 },
+            'right':        { box: 'right',  index: 0 },
+        };
+        return config[position] || config['right'];
+    }
+
+    _addToPanel() {
+        const { box, index } = this._getPositionConfig();
+        Main.panel.addToStatusArea(this.uuid, this._indicator!, index, box);
+    }
+
+    _repositionButton() {
+        if (!this._indicator) return;
+
+        // Remove from current position
+        const container = this._indicator.get_parent();
+        if (container) {
+            container.remove_child(this._indicator);
+        }
+
+        // Add to new position
+        const { box, index } = this._getPositionConfig();
+        // @ts-expect-error - dynamic panel box access
+        const boxWidget = Main.panel[`_${box}Box`] as St.BoxLayout;
+        const clampedIndex = Math.min(index, boxWidget.get_n_children());
+        boxWidget.insert_child_at_index(this._indicator, clampedIndex);
     }
 
     _buildPopupMenu() {
@@ -60,6 +129,59 @@ export default class TodoListExtension extends Extension {
         // Create main box
         this.mainBox = new St.BoxLayout({ vertical: true });
 
+        // Initialize selected group from settings
+        this._selectedGroupId = this._manager?.getLastSelectedGroup() || 'inbox';
+
+        // Initialize all groups as expanded by default
+        const groups = this._manager?.getGroups() || [];
+        groups.forEach(g => this._expandedGroups.add(g.id));
+
+        // Filter dropdown at top
+        const filterSection = new St.BoxLayout({
+            vertical: false,
+            style: "padding: 8px 12px; spacing: 8px;",
+        });
+
+        const filterLabel = new St.Label({
+            text: _("Filter:"),
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+
+        this._filterDropdown = this._createDropdown(
+            this._getFilterLabel(),
+            () => this._cycleFilter()
+        );
+
+        // Spacer to push settings button to the right
+        const spacer = new St.Widget({ x_expand: true });
+
+        // Settings button
+        const settingsBtn = new St.Button({
+            child: new St.Icon({
+                icon_name: 'emblem-system-symbolic',
+                style_class: 'btn-icon',
+            }),
+            style_class: 'settings-btn',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        settingsBtn.connect('clicked', () => {
+            // Close the menu first
+            // @ts-expect-error - close() works without animation argument
+            this.button?.menu.close();
+            // Open extension preferences
+            this.openPreferences();
+        });
+
+        filterSection.add_child(filterLabel);
+        filterSection.add_child(this._filterDropdown);
+        filterSection.add_child(spacer);
+        filterSection.add_child(settingsBtn);
+        this.mainBox.add_child(filterSection);
+
+        // Separator after filter
+        const filterSeparator = new PopupMenu.PopupSeparatorMenuItem();
+        this.mainBox.add_child(filterSeparator);
+
         // Create todos box
         this.todosBox = new St.BoxLayout({ vertical: true });
 
@@ -68,8 +190,23 @@ export default class TodoListExtension extends Extension {
             style_class: "vfade",
         });
         this.scrollView.add_child(this.todosBox);
-        // Separator
-        var separator = new PopupMenu.PopupSeparatorMenuItem();
+
+        // Separator before input
+        const separator = new PopupMenu.PopupSeparatorMenuItem();
+
+        // Bottom section with input and buttons
+        const bottomSection = new PopupMenu.PopupMenuSection();
+        const inputContainer = new St.BoxLayout({
+            vertical: false,
+            style: "spacing: 8px;",
+        });
+
+        // Group selector dropdown (click to cycle through groups)
+        this._groupDropdown = this._createDropdown(
+            this._getGroupLabel(this._selectedGroupId),
+            () => this._cycleGroup()
+        );
+        this._groupDropdown.set_style("min-width: 80px;");
 
         // Text entry
         this.input = new St.Entry({
@@ -78,12 +215,11 @@ export default class TodoListExtension extends Extension {
             track_hover: true,
             can_focus: true,
             styleClass: "input",
-            style: "width: 420px; height: 35px;",
+            style: "width: 320px; height: 35px;",
         });
 
-        // this.input.set_style("max-width: ${MAX_WINDOW_WIDTH};");
         this.input.clutterText.connect("activate", (source) => {
-            let taskText = source.get_text().trim();
+            const taskText = source.get_text().trim();
             if (taskText) {
                 this._addTask(taskText);
                 source.set_text("");
@@ -92,31 +228,11 @@ export default class TodoListExtension extends Extension {
         });
         this.input.clutterText.set_max_length(MAX_INPUT_CHARS);
 
-        // Clear all button
-        this.clearAllBtn = new St.Button({
-            child: new St.Icon({
-                icon_name: "edit-delete-symbolic",
-                style_class: "btn-icon",
-            }),
-            style_class: "input-area-btn remove-btn",
-            y_align: Clutter.ActorAlign.CENTER,
-            x_align: Clutter.ActorAlign.END,
-        });
-
-        this.clearAllBtn.connect("clicked", () => {
-            this._showClearAllConfirmation();
-        });
-
-        // Bottom section with input and buttons
-        var bottomSection = new PopupMenu.PopupMenuSection();
-        var inputContainer = new St.BoxLayout({
-            vertical: false,
-            style: "spacing: 10px;",
-        });
-
+        inputContainer.add_child(this._groupDropdown);
         inputContainer.add_child(this.input);
-        inputContainer.add_child(this.clearAllBtn);
-        bottomSection.actor.add_child(inputContainer); this.mainBox.add_child(this.scrollView);
+        bottomSection.actor.add_child(inputContainer);
+
+        this.mainBox.add_child(this.scrollView);
         this.mainBox.add_child(separator);
         this.mainBox.set_style(`width: ${MAX_WINDOW_WIDTH}px; max-height: 500px;`);
         this.mainBox.add_child(bottomSection.actor);
@@ -124,58 +240,216 @@ export default class TodoListExtension extends Extension {
         (this.button?.menu as PopupMenu.PopupMenu).box.add_child(this.mainBox);
     }
 
-    _populate() {
+    _createDropdown(label: string, onClick: () => void): St.Button {
+        const box = new St.BoxLayout({ vertical: false, style: "spacing: 4px;" });
+        const textLabel = new St.Label({
+            text: label,
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        const arrow = new St.Icon({
+            icon_name: "pan-down-symbolic",
+            style_class: "btn-icon",
+        });
+        box.add_child(textLabel);
+        box.add_child(arrow);
+
+        const btn = new St.Button({
+            child: box,
+            style_class: "dropdown-btn",
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        btn.connect("clicked", onClick);
+        return btn;
+    }
+
+    _getFilterLabel(): string {
+        const filterGroup = this._manager?.getFilterGroup();
+        if (!filterGroup) return _("All");
+        const group = this._manager?.getGroup(filterGroup);
+        return group?.name || _("All");
+    }
+
+    _getGroupLabel(groupId: string): string {
+        const group = this._manager?.getGroup(groupId);
+        return group?.name || _("Inbox");
+    }
+
+    _cycleFilter() {
+        // Cycle through: All → group1 → group2 → ... → All
+        const groups = this._manager?.getGroups() || [];
+        const currentFilter = this._manager?.getFilterGroup() || '';
+
+        if (!currentFilter) {
+            // Currently "All", go to first group
+            if (groups.length > 0) {
+                this._manager?.setFilterGroup(groups[0].id);
+            }
+        } else {
+            // Find current group index and go to next (or wrap to All)
+            const currentIndex = groups.findIndex(g => g.id === currentFilter);
+            if (currentIndex === -1 || currentIndex === groups.length - 1) {
+                // Not found or last group, go to All
+                this._manager?.setFilterGroup('');
+            } else {
+                // Go to next group
+                this._manager?.setFilterGroup(groups[currentIndex + 1].id);
+            }
+        }
+
+        this._updateFilterLabel();
+        this._populate(true);
+    }
+
+    _cycleGroup() {
+        // Cycle through groups for new task assignment
+        const groups = this._manager?.getGroups() || [];
+        if (groups.length === 0) return;
+
+        const currentIndex = groups.findIndex(g => g.id === this._selectedGroupId);
+        const nextIndex = (currentIndex + 1) % groups.length;
+
+        this._selectedGroupId = groups[nextIndex].id;
+        this._manager?.setLastSelectedGroup(this._selectedGroupId);
+        this._updateGroupLabel();
+    }
+
+    _updateFilterLabel() {
+        if (this._filterDropdown) {
+            const box = this._filterDropdown.get_child() as St.BoxLayout;
+            const label = box.get_first_child() as St.Label;
+            label.set_text(this._getFilterLabel());
+        }
+    }
+
+    _updateGroupLabel() {
+        if (this._groupDropdown) {
+            const box = this._groupDropdown.get_child() as St.BoxLayout;
+            const label = box.get_first_child() as St.Label;
+            label.set_text(this._getGroupLabel(this._selectedGroupId));
+        }
+    }
+
+    _populate(updateButtonText = false) {
         // clear the todos box before populating it
         this.todosBox?.destroy_all_children();
-        const allTodos = this._manager?.get();
-        // Show all tasks (both done and undone)
-        const todos = allTodos || [];
+        const todos = this._manager?.getParsed() || [];
+        const filterGroup = this._manager?.getFilterGroup() || '';
+        const groups = this._manager?.getGroups() || [];
 
-        if (isEmpty(todos)) {
-            let item = new St.Label({
+        // Filter tasks if a filter is set
+        const filteredTasks = filterGroup
+            ? todos.filter(t => t.groupId === filterGroup)
+            : todos;
+
+        if (!filteredTasks.length) {
+            const item = new St.Label({
                 text: _("✅ Nothing to do for now"),
                 y_align: Clutter.ActorAlign.CENTER,
                 style: "text-align:center; font-size: 20px; padding: 20px 0;",
             });
             this.todosBox?.add_child(item);
-        } else {
-            todos.forEach((task, index) => {
-                const parsedTask = JSON.parse(task) as Task;
-                this._addTodoItem(parsedTask, index);
-            });
+            if (updateButtonText) {
+                // No tasks in filter = 0 undone (avoids redundant getParsed() call)
+                this._setButtonText(0);
+            }
+            return;
+        }
+
+        // Group tasks by groupId
+        const tasksByGroup = new Map<string, { task: Task; index: number }[]>();
+        todos.forEach((task, index) => {
+            const groupId = task.groupId || 'inbox';
+            if (!tasksByGroup.has(groupId)) {
+                tasksByGroup.set(groupId, []);
+            }
+            tasksByGroup.get(groupId)!.push({ task, index });
+        });
+
+        let totalUndone = 0;
+
+        // Render each group
+        groups.forEach(group => {
+            const groupTasks = tasksByGroup.get(group.id) || [];
+
+            // Skip empty groups or groups not matching filter
+            if (groupTasks.length === 0) return;
+            if (filterGroup && filterGroup !== group.id) return;
+
+            // Create collapsible group header
+            const isExpanded = this._expandedGroups.has(group.id);
+            const groupHeader = this._createGroupHeader(group, groupTasks.length, isExpanded);
+            this.todosBox?.add_child(groupHeader);
+
+            // Render tasks if expanded
+            if (isExpanded) {
+                groupTasks.forEach(({ task, index }) => {
+                    if (!task.isDone) totalUndone++;
+                    this._addTodoItem(task, index);
+                });
+            } else {
+                // Still count undone even if collapsed
+                groupTasks.forEach(({ task }) => {
+                    if (!task.isDone) totalUndone++;
+                });
+            }
+        });
+
+        if (updateButtonText) {
+            this._setButtonText(totalUndone);
         }
     }
 
+    _createGroupHeader(group: { id: string; name: string; color: string }, taskCount: number, isExpanded: boolean): St.BoxLayout {
+        const header = new St.BoxLayout({
+            vertical: false,
+            style: `padding: 8px 12px; background-color: ${group.color}22; border-left: 3px solid ${group.color};`,
+            reactive: true,
+        });
+
+        const expandIcon = new St.Icon({
+            icon_name: isExpanded ? "pan-down-symbolic" : "pan-end-symbolic",
+            style_class: "btn-icon",
+        });
+
+        const nameLabel = new St.Label({
+            text: `${group.name} (${taskCount})`,
+            y_align: Clutter.ActorAlign.CENTER,
+            style: "font-weight: bold; margin-left: 8px;",
+        });
+
+        header.add_child(expandIcon);
+        header.add_child(nameLabel);
+
+        // Toggle expand/collapse on click
+        header.connect('button-press-event', () => {
+            if (this._expandedGroups.has(group.id)) {
+                this._expandedGroups.delete(group.id);
+            } else {
+                this._expandedGroups.add(group.id);
+            }
+            this._populate();
+            return Clutter.EVENT_STOP;
+        });
+
+        return header;
+    }
+
     _addTask(task: string) {
-        this._manager?.add(task);
-        this._populate();
-        this._refreshTodosButtonText();
+        this._manager?.add(task, this._selectedGroupId);
+        this._populate(true);
     }
 
     _addTodoItem(task: Task, index: number) {
         const isFocused = index === 0 && task.isFocused;
         // Create a new PopupMenuItem for the task
-        let item = new PopupMenu.PopupMenuItem("");
+        const item = new PopupMenu.PopupMenuItem("");
         item.style_class = `item ${isFocused ? "focused-task" : ""}`;
         // Create a horizontal box layout for custom alignment
-        let box = new St.BoxLayout({
+        const box = new St.BoxLayout({
             style_class: "todo-item-layout", // You can add a custom class here
             vertical: false,
         });
 
-        // Selection checkbox (visible only in select mode)
-        const selectionCheckbox = new St.Button({
-            child: new St.Icon({
-                icon_name: "",
-                style_class: "btn-icon",
-            }),
-            style_class: "selection-checkbox",
-            y_align: Clutter.ActorAlign.CENTER,
-            visible: false,
-        });
-
-        // Remove the selection checkbox functionality completely
-        // box.add_child(selectionCheckbox);
 
         // Checkbox button
         const toggleBtnLabel = new St.Label({
@@ -196,36 +470,20 @@ export default class TodoListExtension extends Extension {
             } else {
                 toggleBtnLabel.set_text("");
             }
-            this._populate();
-            this._refreshTodosButtonText();
+            this._populate(true);
         });
 
         box.add_child(toggleCompletionBtn);
 
-        // Task label/entry container
-        const labelContainer = new St.BoxLayout({
-            vertical: false,
-            style_class: "task-label-container",
-        });
-
-        // Task label (default view)
+        // Task label
         const label = new St.Label({
             text: task.name,
             y_align: Clutter.ActorAlign.CENTER,
+            x_expand: true,
             style_class: "task-label",
-            reactive: true,
         });
         label.clutterText.line_wrap = true;
         label.clutterText.set_ellipsize(0);
-
-        // Task entry (edit mode)
-        const taskEntry = new St.Entry({
-            text: task.name,
-            style_class: "task-entry",
-            y_align: Clutter.ActorAlign.CENTER,
-            visible: false,
-        });
-        taskEntry.clutterText.set_max_length(MAX_INPUT_CHARS);
 
         if (task.isDone) {
             // cross line
@@ -233,38 +491,7 @@ export default class TodoListExtension extends Extension {
             label.set_style("color: #999");
         }
 
-        // Make label clickable to enter edit mode
-        label.connect('button-press-event', () => {
-            if (!task.isDone) { // Only allow editing if task is not done
-                this._enterEditMode(label, taskEntry, task, index);
-            }
-            return Clutter.EVENT_STOP;
-        });
-
-        // Handle entry submission
-        taskEntry.clutterText.connect('activate', () => {
-            this._exitEditMode(label, taskEntry, task, index);
-        });
-
-        // Handle entry focus loss
-        taskEntry.connect('key-focus-out', () => {
-            this._exitEditMode(label, taskEntry, task, index);
-        });
-
-        // Handle escape key
-        taskEntry.connect('key-press-event', (actor: any, event: any) => {
-            if (event.get_key_symbol() === Clutter.KEY_Escape) {
-                taskEntry.set_text(task.name); // Restore original text
-                this._exitEditMode(label, taskEntry, task, index, false); // Don't save
-                return Clutter.EVENT_STOP;
-            }
-            return Clutter.EVENT_PROPAGATE;
-        });
-
-        labelContainer.add_child(label);
-        labelContainer.add_child(taskEntry);
-
-        // Copty button
+        // Copy button
         const copyButton = new St.Button({
             child: new St.Icon({
                 icon_name: "edit-copy-symbolic",
@@ -276,7 +503,7 @@ export default class TodoListExtension extends Extension {
         });
         copyButton.connect("clicked", () => {
             // Access the clipboard
-            let clipboard = St.Clipboard.get_default();
+            const clipboard = St.Clipboard.get_default();
             clipboard.set_text(St.ClipboardType.CLIPBOARD, task.name); // Copy to clipboard
             // Optionally show a notification
             Main.notify("Copied to clipboard", task.name);
@@ -294,11 +521,13 @@ export default class TodoListExtension extends Extension {
             x_align: Clutter.ActorAlign.END,
         });
         renameButton.connect("clicked", () => {
-            this._renameTask(task, index);
+            if (!task.isDone) {
+                this._renameTask(task, index);
+            }
             return Clutter.EVENT_STOP; // Stop propagation of the event
         });
 
-        // Remove button
+        // Remove button (hidden in edit mode)
         const removeButton = new St.Button({
             child: new St.Icon({
                 icon_name: "edit-delete-symbolic",
@@ -314,17 +543,17 @@ export default class TodoListExtension extends Extension {
             if (task.isDone) {
                 // No confirmation for completed tasks
                 this._manager?.remove(index);
-                this._populate();
-                this._refreshTodosButtonText();
+                this._populate(true);
             } else {
                 // Show confirmation for uncompleted tasks
                 this._showDeleteConfirmation(task.name, index, () => {
                     this._manager?.remove(index);
-                    this._populate();
-                    this._refreshTodosButtonText();
+                    this._populate(true);
                 });
             }
-        });    // Focus button
+        });
+
+        // Focus button
         const focusButton = new St.Button({
             child: new St.Icon({
                 icon_name: "find-location-symbolic",
@@ -355,7 +584,7 @@ export default class TodoListExtension extends Extension {
         actionButtonsContainer.add_child(focusButton);
         actionButtonsContainer.add_child(removeButton);
 
-        box.add_child(labelContainer);
+        box.add_child(label);
         box.add_child(actionButtonsContainer);
 
         // Add the box to the item
@@ -365,32 +594,8 @@ export default class TodoListExtension extends Extension {
         this.todosBox?.add_child(item);
     }
 
-    _refreshTodosButtonText() {
-        const total = this._manager?.getTotalUndone();
-        this.buttonText?.clutterText.set_text(buttonIcon(total ?? 0));
-    }
-
-    _renameTask(task: Task, index: number) {
-        // Don't allow renaming completed tasks
-        if (task.isDone) {
-            return;
-        }
-
-        // Put the task text in the input field
-        this.input?.set_text(task.name);
-
-        // Remove the task from the list
-        this._manager?.remove(index);
-
-        // Refresh the view to remove the task from display
-        this._populate();
-        this._refreshTodosButtonText();
-
-        // Focus the input field for editing
-        this.input?.clutterText.grab_key_focus();
-
-        // Select all text for easy editing
-        this.input?.clutterText.set_selection(0, -1);
+    _setButtonText(count: number) {
+        this.buttonText?.clutterText.set_text(buttonIcon(count));
     }
 
     _toggleShortcut() {
@@ -406,28 +611,21 @@ export default class TodoListExtension extends Extension {
         );
     }
 
-    _enterEditMode(label: St.Label, taskEntry: St.Entry, task: Task, index: number) {
-        label.visible = false;
-        taskEntry.visible = true;
-        taskEntry.grab_key_focus();
-        // Select all text
-        taskEntry.clutterText.set_selection(0, -1);
-    }
+    _renameTask(task: Task, index: number) {
+        // Put the task text in the input field
+        this.input?.set_text(task.name);
 
-    _exitEditMode(label: St.Label, taskEntry: St.Entry, task: Task, index: number, shouldSave = true) {
-        if (shouldSave) {
-            const newText = taskEntry.get_text().trim();
-            if (newText && newText !== task.name) {
-                // Update the task
-                this._manager?.update(index, { ...task, name: newText });
-                this._populate(); // Refresh the view
-                return;
-            }
-        }
+        // Remove the task from the list
+        this._manager?.remove(index);
 
-        // Just switch back to label view
-        taskEntry.visible = false;
-        label.visible = true;
+        // Refresh the view to remove the task from display
+        this._populate(true);
+
+        // Focus the input field for editing
+        this.input?.clutterText.grab_key_focus();
+
+        // Select all text for easy editing
+        this.input?.clutterText.set_selection(0, -1);
     }
 
     _createConfirmationDialog(
@@ -438,7 +636,7 @@ export default class TodoListExtension extends Extension {
     ) {
         // Remove any existing confirmation first
         if (this._activeConfirmation) {
-            this.todosBox!.remove_child(this._activeConfirmation);
+            this._activeConfirmation.destroy();
             this._activeConfirmation = null;
         }
 
@@ -500,7 +698,7 @@ export default class TodoListExtension extends Extension {
 
         const removeConfirmation = () => {
             if (this._activeConfirmation) {
-                this.todosBox!.remove_child(this._activeConfirmation);
+                this._activeConfirmation.destroy();
                 this._activeConfirmation = null;
             }
         };
@@ -541,30 +739,6 @@ export default class TodoListExtension extends Extension {
         });
     }
 
-    _showClearAllConfirmation() {
-        const allTodos = this._manager?.get() || [];
-        if (allTodos.length === 0) {
-            return; // Nothing to clear
-        }
-
-        this._createConfirmationDialog(
-            "Clear all tasks?",
-            () => this._clearAllTasks(),
-            0,
-            true
-        );
-    }
-
-    _clearAllTasks() {
-        const allTodos = this._manager?.get() || [];
-        // Remove all tasks in reverse order to maintain indices
-        for (let i = allTodos.length - 1; i >= 0; i--) {
-            this._manager?.remove(i);
-        }
-        this._populate();
-        this._refreshTodosButtonText();
-    }
-
     _showDeleteConfirmation(taskName: string, itemIndex: number, onConfirm: () => void) {
         // Create a beautiful modal-like confirmation
         const truncatedName = taskName.length > 40 ? taskName.substring(0, 40) + "..." : taskName;
@@ -581,12 +755,27 @@ export default class TodoListExtension extends Extension {
         // Remove keybinding
         Main.wm.removeKeybinding("open-todozen");
 
-        // Remove all timeouts safely
-        if (this._activeConfirmationTimeoutId) {
-            GLib.source_remove(this._activeConfirmationTimeoutId);
-            this._activeConfirmationTimeoutId = null;
+        // Disconnect settings signals
+        if (this._positionChangedId && this._settings) {
+            this._settings.disconnect(this._positionChangedId);
+            this._positionChangedId = null;
+        }
+        if (this._groupsChangedId && this._settings) {
+            this._settings.disconnect(this._groupsChangedId);
+            this._groupsChangedId = null;
+        }
+        if (this._todosChangedId && this._settings) {
+            this._settings.disconnect(this._todosChangedId);
+            this._todosChangedId = null;
         }
 
+        // Disconnect menu open-state-changed signal
+        if (this._menuOpenStateId && this.button?.menu) {
+            this.button.menu.disconnect(this._menuOpenStateId);
+            this._menuOpenStateId = null;
+        }
+
+        // Remove all timeouts safely
         if (this._confirmationTimeoutId) {
             GLib.source_remove(this._confirmationTimeoutId);
             this._confirmationTimeoutId = null;
@@ -594,50 +783,34 @@ export default class TodoListExtension extends Extension {
 
         if (this._activeConfirmation) {
             try {
-                this.todosBox?.remove_child(this._activeConfirmation);
+                this._activeConfirmation.destroy();
             } catch {
             }
             this._activeConfirmation = null;
         }
 
-        // Destroy UI objects safely
-        const widgets = [
-            this.mainBox,
-            this.todosBox,
-            this.scrollView,
-            this.buttonText,
-            this.input,
-            this.button,
-            this.clearAllBtn,
-            this._indicator
-        ];
-
-        let failedDestroy = false;
-
-        for (const widget of widgets) {
-            if (widget) {
-                try {
-                    widget.destroy();
-                } catch {
-                    failedDestroy = true;
-                }
-            }
+        // Destroy top-level widgets only (children are destroyed automatically)
+        // Order matters: destroy indicator last as it owns the menu
+        try {
+            this._indicator?.destroy();
+        } catch {
         }
 
-        if (failedDestroy) {
-            console.warn('Warning: some widgets failed to destroy in disable()');
-        }
-
-        // Clear references
+        // Clear all references
         this.mainBox = null;
         this.todosBox = null;
         this.scrollView = null;
         this.buttonText = null;
         this.input = null;
         this.button = null;
-        this.clearAllBtn = null;
         this._indicator = null;
         this._activeConfirmation = null;
+        this._filterDropdown = null;
+        this._groupDropdown = null;
+        this._expandedGroups.clear();
+        this._manager?.destroy();
+        this._manager = null;
+        this._settings = null;
     }
 
 }

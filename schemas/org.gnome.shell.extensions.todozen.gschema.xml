@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <schemalist>
+  <!-- Panel position: L=left box, M=center box, R=right box -->
+  <!-- Second char: L=leftmost, 1=after first, R=rightmost -->
+  <enum id="org.gnome.shell.extensions.todozen.position">
+    <value nick="left" value="1"/>
+    <value nick="center-left" value="2"/>
+    <value nick="center" value="3"/>
+    <value nick="center-right" value="4"/>
+    <value nick="right" value="5"/>
+  </enum>
+
   <schema id="org.gnome.shell.extensions.todozen" path="/org/gnome/shell/extensions/todozen/">
     <key name="todos" type="as">
       <default>[]</default>
@@ -10,6 +20,31 @@
       <default><![CDATA[['<Alt><Shift>space']]]></default>
       <summary>Shortcut to open the extension</summary>
       <description>Click `Alt+Shift+Space` to open the extension.</description>
+    </key>
+    <key name="panel-position" enum="org.gnome.shell.extensions.todozen.position">
+      <default>'right'</default>
+      <summary>Panel button position</summary>
+      <description>Where to place the TodoZen button in the top panel.</description>
+    </key>
+    <key name="enable-history" type="b">
+      <default>true</default>
+      <summary>Enable history logging</summary>
+      <description>Log all task actions to ~/.config/todozen/history.jsonl</description>
+    </key>
+    <key name="groups" type="as">
+      <default>['{"version":1,"id":"inbox","name":"Inbox","color":"#3584e4"}']</default>
+      <summary>Task groups</summary>
+      <description>List of task groups as JSON objects</description>
+    </key>
+    <key name="last-selected-group" type="s">
+      <default>'inbox'</default>
+      <summary>Last selected group</summary>
+      <description>Remember the last selected group for new tasks</description>
+    </key>
+    <key name="filter-group" type="s">
+      <default>''</default>
+      <summary>Filter by group</summary>
+      <description>Show only tasks from this group (empty = show all)</description>
     </key>
   </schema>
 </schemalist>
