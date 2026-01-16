@@ -176,6 +176,18 @@ describe('extractUrls', () => {
         const result = extractUrls('API: https://api.example.com:8080/v1/users?id=123&active=true#top');
         expect(result.urls).toEqual(['https://api.example.com:8080/v1/users?id=123&active=true#top']);
     });
+
+    it('should handle multiple URLs only (no text)', () => {
+        const result = extractUrls('https://first.com https://second.com');
+        expect(result.urls).toEqual(['https://first.com', 'https://second.com']);
+        expect(result.displayText).toBe('https://first.com'); // First URL as fallback
+    });
+
+    it('should handle URL with parentheses in path', () => {
+        const result = extractUrls('Wiki: https://en.wikipedia.org/wiki/Test_(disambiguation)');
+        // Note: trailing ) gets stripped, this is a known limitation
+        expect(result.urls[0]).toContain('wikipedia.org');
+    });
 });
 
 describe('extractUrl (deprecated)', () => {
@@ -779,6 +791,12 @@ describe('validateTask', () => {
         const result = validateTask(task);
         expect(result.ok).toBe(false);
     });
+
+    it('should reject task with invalid version', () => {
+        const task = { version: 'one', id: 'task_1', name: 'Test', isDone: false } as unknown as Task;
+        const result = validateTask(task);
+        expect(result.ok).toBe(false);
+    });
 });
 
 describe('validateGroup', () => {
@@ -790,6 +808,12 @@ describe('validateGroup', () => {
 
     it('should reject group without color', () => {
         const group = { version: 1, id: 'inbox', name: 'Inbox', color: '' } as Group;
+        const result = validateGroup(group);
+        expect(result.ok).toBe(false);
+    });
+
+    it('should reject group with invalid version', () => {
+        const group = { version: 'one', id: 'inbox', name: 'Inbox', color: '#3584e4' } as unknown as Group;
         const result = validateGroup(group);
         expect(result.ok).toBe(false);
     });

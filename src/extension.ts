@@ -1053,6 +1053,8 @@ export default class TodoListExtension extends Extension {
         this._filterDropdown = null;
         this._groupDropdown = null;
         this._expandedGroups.clear();
+        this._taskItems = [];
+        this._isEditing = false;
         this._manager?.destroy();
         this._manager = null;
         this._settings = null;
