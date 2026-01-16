@@ -570,7 +570,7 @@ describe('moveTaskToTop', () => {
         ];
         const updatedTask: Task = { version: 1, id: '3', name: 'Third', isDone: false, isFocused: true };
 
-        const result = moveTaskToTop(todos, 2, updatedTask);
+        const { todos: result } = moveTaskToTop(todos, 2, updatedTask);
         expect(JSON.parse(result[0]).isFocused).toBe(true);
         expect(JSON.parse(result[2]).id).toBe('1');
     });
@@ -581,7 +581,7 @@ describe('moveTaskToTop', () => {
         ];
         const updatedTask: Task = { version: 1, id: '1', name: 'Updated', isDone: false, isFocused: true };
 
-        const result = moveTaskToTop(todos, 0, updatedTask);
+        const { todos: result } = moveTaskToTop(todos, 0, updatedTask);
         expect(JSON.parse(result[0]).name).toBe('Updated');
     });
 
@@ -592,7 +592,7 @@ describe('moveTaskToTop', () => {
         ];
         const updatedTask: Task = { version: 1, id: '2', name: 'Updated', isDone: false, isFocused: false };
 
-        const result = moveTaskToTop(todos, 1, updatedTask);
+        const { todos: result } = moveTaskToTop(todos, 1, updatedTask);
         expect(JSON.parse(result[1]).name).toBe('Updated');
     });
 
@@ -606,6 +606,55 @@ describe('moveTaskToTop', () => {
 
         moveTaskToTop(todos, 1, updatedTask);
         expect(todos).toEqual(original);
+    });
+
+    it('should unfocus previously focused task when focusing a new one', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'First', isFocused: true }),
+            JSON.stringify({ id: '2', name: 'Second', isFocused: false }),
+            JSON.stringify({ id: '3', name: 'Third', isFocused: false }),
+        ];
+        const updatedTask: Task = { version: 1, id: '3', name: 'Third', isDone: false, isFocused: true };
+
+        const { todos: result, unfocusedTasks } = moveTaskToTop(todos, 2, updatedTask);
+        // Task 3 should be at top and focused
+        expect(JSON.parse(result[0]).id).toBe('3');
+        expect(JSON.parse(result[0]).isFocused).toBe(true);
+        // Task 1 should now be unfocused
+        expect(JSON.parse(result[2]).id).toBe('1');
+        expect(JSON.parse(result[2]).isFocused).toBe(false);
+        // Should report unfocused task
+        expect(unfocusedTasks).toHaveLength(1);
+        expect(unfocusedTasks[0].id).toBe('1');
+    });
+
+    it('should not change other tasks when unfocusing', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'First', isFocused: true }),
+            JSON.stringify({ id: '2', name: 'Second', isFocused: false }),
+        ];
+        const updatedTask: Task = { version: 1, id: '1', name: 'First', isDone: false, isFocused: false };
+
+        const { todos: result, unfocusedTasks } = moveTaskToTop(todos, 0, updatedTask);
+        // Task 1 unfocused, stays at position 0
+        expect(JSON.parse(result[0]).id).toBe('1');
+        expect(JSON.parse(result[0]).isFocused).toBe(false);
+        // Task 2 unchanged
+        expect(JSON.parse(result[1]).id).toBe('2');
+        expect(JSON.parse(result[1]).isFocused).toBe(false);
+        // No implicit unfocusing (explicit unfocus doesn't count)
+        expect(unfocusedTasks).toHaveLength(0);
+    });
+
+    it('should return empty unfocusedTasks when no prior focused task', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'First', isFocused: false }),
+            JSON.stringify({ id: '2', name: 'Second', isFocused: false }),
+        ];
+        const updatedTask: Task = { version: 1, id: '2', name: 'Second', isDone: false, isFocused: true };
+
+        const { unfocusedTasks } = moveTaskToTop(todos, 1, updatedTask);
+        expect(unfocusedTasks).toHaveLength(0);
     });
 });
 
@@ -684,6 +733,31 @@ describe('moveTaskToEndOfGroup', () => {
 
         moveTaskToEndOfGroup(todos, 0);
         expect(todos).toEqual(original);
+    });
+
+    it('should unfocus task when moving (pinned tasks stay at top)', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work', isFocused: true }),
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'work' }),
+            JSON.stringify({ id: '3', name: 'Task 3', groupId: 'work' }),
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        const movedTask = JSON.parse(result[2]);
+        expect(movedTask.id).toBe('1');
+        expect(movedTask.isFocused).toBe(false);
+    });
+
+    it('should not change isFocused if task was not focused', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work', isFocused: false }),
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'work' }),
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        const movedTask = JSON.parse(result[1]);
+        expect(movedTask.id).toBe('1');
+        expect(movedTask.isFocused).toBe(false);
     });
 });
 

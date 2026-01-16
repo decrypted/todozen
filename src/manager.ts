@@ -90,11 +90,6 @@ export class TodoListManager {
     return tasks;
   }
 
-  // Invalidate cache when we modify tasks
-  private _invalidateTasksCache() {
-    this._tasksCache = null;
-  }
-
   getTotalUndone(groupId?: string): number {
     return countUndoneTasks(this.getParsed(), groupId);
   }
@@ -128,10 +123,15 @@ export class TodoListManager {
     if (!todos.length) return;
 
     const oldTask: Task = JSON.parse(todos[index]);
-    const updatedTodos = moveTaskToTop(todos, index, todo);
+    const { todos: updatedTodos, unfocusedTasks } = moveTaskToTop(todos, index, todo);
     this.GSettings.set_strv(TODOS, updatedTodos);
 
-    // Log changes
+    // Log any tasks that were implicitly unfocused
+    for (const unfocused of unfocusedTasks) {
+      this._logIfEnabled('unfocused', { taskId: unfocused.id, task: unfocused.name });
+    }
+
+    // Log changes for the updated task
     if (oldTask.name !== todo.name) {
       this._logIfEnabled('renamed', { taskId: todo.id, oldName: oldTask.name, newName: todo.name });
     }
@@ -153,8 +153,15 @@ export class TodoListManager {
     if (!todos.length || index < 0 || index >= todos.length) return;
 
     const task: Task = JSON.parse(todos[index]);
+    const wasFocused = task.isFocused;
+
     const updatedTodos = moveTaskToEndOfGroup(todos, index);
     this.GSettings.set_strv(TODOS, updatedTodos);
+
+    // Log unfocus if task was focused (moveTaskToEndOfGroup unfocuses it)
+    if (wasFocused) {
+      this._logIfEnabled('unfocused', { taskId: task.id, task: task.name });
+    }
     this._logIfEnabled('moved_to_end', { taskId: task.id, task: task.name });
   }
 

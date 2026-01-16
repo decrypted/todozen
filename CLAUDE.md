@@ -25,6 +25,20 @@ TodoZen is a GNOME Shell extension for managing tasks with minimal CPU usage. It
 2. ESLint for code style
 3. Unit tests for manager logic
 4. Versioned data model for future migrations
+5. **Coverage thresholds** - `make check` enforces 95%+ coverage on utils.ts
+
+### Dependencies
+1. **Keep up to date** - Run `yarn outdated` regularly, update non-breaking dependencies
+2. **Use yarn consistently** - All commands use `yarn run`, not npm
+
+### GNOME Compatibility
+See **[GNOME.md](GNOME.md)** for full reference (Ubuntu versions, type packages, cross-version workarounds).
+
+**Quick reference:**
+- **Develop against** `@girs/gnome-shell@^46.0.0` (oldest available types)
+- **Target runtime** GNOME 42-49 (Ubuntu 22.04 LTS and newer)
+- **Run** `make check-compat` to test against both 46 and 49 types
+- **Use** `@ts-ignore` (not `@ts-expect-error`) for cross-version type differences
 
 ## IMPORTANT: Adding New TypeScript Files
 
@@ -84,7 +98,7 @@ interface Group {
 
 ### History Actions
 Logged to JSONL when `enable-history` is true:
-- Task: added, removed, completed, uncompleted, focused, unfocused, renamed, cleared_all, moved_group
+- Task: added, removed, completed, uncompleted, focused, unfocused, renamed, cleared_all, moved_group, moved_to_end
 - Group: group_created, group_renamed, group_deleted
 
 ### GSettings Keys
@@ -95,14 +109,18 @@ Logged to JSONL when `enable-history` is true:
 - `panel-position` - enum (left, center-left, center, center-right, right)
 - `popup-width` - enum (normal=500px, wide=700px, ultra=900px)
 - `enable-history` - boolean
+- `show-move-to-end-button` - boolean (show button to move task to end of group)
+- `show-pinned-in-panel` - boolean (show pinned task in top panel)
 - `open-todozen` - keybinding (default Alt+Shift+Space)
 
 ## Testing & Linting
 ```bash
-make test       # Run unit tests
-make lint       # Check code style
-make lint-fix   # Auto-fix lint issues
-make check      # Run all checks (TypeScript + ESLint + tests)
+make test          # Run unit tests
+make test-coverage # Run tests with coverage report
+make lint          # Check code style
+make lint-fix      # Auto-fix lint issues
+make check         # All checks (TypeScript + ESLint + tests + verify-dist + GNOME compat)
+make check-compat  # Test TypeScript against GNOME 46 and 49 types only
 ```
 
 ## GNOME Shell Constraints

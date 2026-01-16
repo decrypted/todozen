@@ -28,7 +28,9 @@ const DEFAULT_COLORS = ['#3584e4', '#e53935', '#43a047', '#fb8c00', '#8e24aa', '
 export default class TodoZenPreferences extends ExtensionPreferences {
     _inhibitor: boolean = false;
 
-    // @ts-expect-error - Gtk type mismatch between girs packages
+    // See GNOME.md for cross-version type workarounds
+    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+    // @ts-ignore - Gtk.Widget type mismatch in GNOME 46 types (fixed in 49+)
     getPreferencesWidget() {
         const ui = Gtk.Builder.new_from_file(this.dir.get_path() + '/prefs.ui');
         const page = ui.get_object('main-page') as Gtk.Widget;

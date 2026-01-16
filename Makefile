@@ -67,22 +67,31 @@ dist: build schemas
 # Testing and linting
 .PHONY: test
 test:
-	npm test
+	yarn run test
+
+.PHONY: test-coverage
+test-coverage:
+	yarn run test:coverage
 
 .PHONY: lint
 lint:
-	npm run lint
+	yarn run lint
 
 .PHONY: lint-fix
 lint-fix:
-	npm run lint:fix
+	yarn run lint:fix
 
 .PHONY: check
 check:
-	npm run check
-	npm test
+	yarn run check
+	yarn run test:coverage
 	@$(MAKE) verify-dist
+	@$(MAKE) check-compat
 	@echo "All checks passed!"
+
+.PHONY: check-compat
+check-compat:
+	@./scripts/check-compat.sh
 
 # Verify all required files end up in the distribution zip
 .PHONY: verify-dist

@@ -1,9 +1,9 @@
 {
   "name": "TodoZen",
-  "description": "Fork of 'todoit-gnome' by Wassim Ben Jdida (@wassimbj) — enhanced with groups, history logging, and improved UX (v3.3.0)",
+  "description": "Fork of 'todoit-gnome' by Wassim Ben Jdida (@wassimbj) — enhanced with groups, history logging, and improved UX",
   "uuid": "todozen@irtesaam.github.io",
-  "shell-version": ["45", "46", "47", "48", "49"],
+  "shell-version": ["42", "43", "44", "45", "46", "47", "48", "49"],
   "url": "https://github.com/Irtesaam/todozen",
   "settings-schema": "org.gnome.shell.extensions.todozen",
-  "version": 33
+  "version": 35
 }

@@ -1,5 +1,31 @@
 # Changelog
 
+## 3.4.0
+
+### Added
+- **GNOME Compatibility Checker**: `make check-compat` tests TypeScript against both GNOME 46 and 49 types
+- **GNOME.md**: Comprehensive reference for GNOME Shell compatibility (Ubuntu versions, type packages, cross-version workarounds)
+- **Ctrl+click panel link**: URL icon in panel now opens link on Ctrl+click without opening popup
+- **Move to end of group button**: Optional button (disabled by default) to move task to end of its group
+
+### Fixed
+- **Move to end unpins task**: Moving a pinned task to end of group now automatically unfocuses it (pinned tasks should stay at top)
+- **Single pin only**: Focusing a new task now unfocuses any previously focused task (only one pinned task at a time)
+- **Panel not updating on pin/unpin**: Panel text now updates when pinning or unpinning a task
+- **Panel not updating on edit**: Fixed by single-pin constraint (only one task can be pinned)
+- **History logging**: Implicit unfocusing (when pinning a new task) is now logged
+
+### Changed
+- `moveTaskToTop()` now returns `{ todos, unfocusedTasks }` to enable logging of implicitly unfocused tasks
+- `moveTaskToEndOfGroup()` now unfocuses task before moving
+- `make check` now includes GNOME compatibility check (previously only in `check-all`)
+- Removed redundant `make check-all` target
+
+### Developer Experience
+- Develop against oldest types (`@girs/gnome-shell@^46.0.0`) for immediate API compatibility feedback
+- Cross-version type workarounds documented with `@ts-ignore` pattern
+- 204 unit tests (up from 199)
+
 ## 3.1.0
 
 ### Added
@@ -24,7 +50,6 @@
 - **LICENSE renamed**: From `LICENCE` to `LICENSE` (standard American spelling)
 
 ### Removed
-- Deleted `src/utils.ts` - `isEmpty()` utility was unnecessary overhead
 - Clear All button from extension popup (moved to prefs)
 
 ### Fixed
@@ -60,7 +85,7 @@
 | `src/prefs.ts` | Groups management, clear all with confirmation, about section |
 | `prefs.ui` | Groups section, clear all, about section |
 | `schemas/*.xml` | Groups, filter-group, last-selected-group, panel-position |
-| `src/utils.ts` | **Deleted** - no longer needed |
+| `src/utils.ts` | Pure functions (URL extraction, validation, task operations) |
 | `Makefile` | Build info generation, install/uninstall targets |
 | `PERFORMANCE.md` | **New** - Performance documentation |
 | `LICENSE` | Renamed from `LICENCE` |

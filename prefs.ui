@@ -89,7 +89,7 @@
         <child>
           <object class="AdwSwitchRow" id="show-pinned-in-panel">
             <property name="title" translatable="yes">Show pinned task in panel</property>
-            <property name="subtitle" translatable="yes">Display focused task text in top bar (max 4 words)</property>
+            <property name="subtitle" translatable="yes">Display focused task text in top bar (max 4 words). Ctrl+click link icon to open URL.</property>
           </object>
         </child>
       </object>

@@ -258,15 +258,36 @@ export function insertTaskAtCorrectPosition(todos: string[], newTaskStr: string)
     return result;
 }
 
+export interface MoveToTopResult {
+    todos: string[];
+    unfocusedTasks: { id: string; name: string }[];
+}
+
 /**
  * Move a task to the top (for focusing).
+ * Also unfocuses any previously focused task (only one task can be pinned).
  * @param todos - Array of task JSON strings
  * @param index - Index of task to move
  * @param updatedTask - Updated task object
- * @returns Updated array with task moved
+ * @returns Updated array with task moved and list of unfocused tasks
  */
-export function moveTaskToTop(todos: string[], index: number, updatedTask: Task): string[] {
+export function moveTaskToTop(todos: string[], index: number, updatedTask: Task): MoveToTopResult {
     const result = [...todos];
+    const unfocusedTasks: { id: string; name: string }[] = [];
+
+    // If focusing a new task, unfocus any previously focused task
+    if (updatedTask.isFocused) {
+        for (let i = 0; i < result.length; i++) {
+            if (i === index) continue; // Skip the task being updated
+            const task: Task = JSON.parse(result[i]);
+            if (task.isFocused) {
+                unfocusedTasks.push({ id: task.id, name: task.name });
+                task.isFocused = false;
+                result[i] = JSON.stringify(task);
+            }
+        }
+    }
+
     if (updatedTask.isFocused && index > 0) {
         const tmp = result[0];
         result[0] = JSON.stringify(updatedTask);
@@ -274,11 +295,12 @@ export function moveTaskToTop(todos: string[], index: number, updatedTask: Task)
     } else {
         result[index] = JSON.stringify(updatedTask);
     }
-    return result;
+    return { todos: result, unfocusedTasks };
 }
 
 /**
  * Move a task to the end of its group.
+ * Also unfocuses the task if it was focused (pinned tasks should stay at top).
  * @param todos - Array of task JSON strings
  * @param index - Index of task to move
  * @returns Updated array with task moved to end of its group
@@ -291,6 +313,12 @@ export function moveTaskToEndOfGroup(todos: string[], index: number): string[] {
     const result = [...todos];
     const task: Task = JSON.parse(result[index]);
     const taskGroupId = task.groupId || 'inbox';
+
+    // Unfocus if pinned (pinned tasks should stay at top, moving breaks that)
+    if (task.isFocused) {
+        task.isFocused = false;
+        result[index] = JSON.stringify(task);
+    }
 
     // Find the last task with the same groupId
     let lastIndexInGroup = index;

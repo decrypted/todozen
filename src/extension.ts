@@ -113,16 +113,21 @@ export default class TodoListExtension extends Extension {
             style: 'padding: 0 4px;',
             y_align: Clutter.ActorAlign.CENTER,
         });
-        this._pinnedLinkBtn.connect('clicked', () => {
-            if (this._pinnedUrl) {
+        // Use button-press-event to detect Ctrl+click before the popup opens
+        this._pinnedLinkBtn.connect('button-press-event', (_actor: unknown, event: Clutter.Event) => {
+            const state = event.get_state();
+            const isCtrlPressed = (state & Clutter.ModifierType.CONTROL_MASK) !== 0;
+
+            if (isCtrlPressed && this._pinnedUrl) {
                 try {
                     Gio.AppInfo.launch_default_for_uri(this._pinnedUrl, null);
                 } catch (error) {
                     const msg = error instanceof Error ? error.message : String(error);
                     Main.notify("Failed to open URL", msg);
                 }
+                return Clutter.EVENT_STOP; // Prevent popup from opening
             }
-            return Clutter.EVENT_STOP;
+            return Clutter.EVENT_PROPAGATE; // Let popup open normally
         });
         this._pinnedLinkBtn.hide();
 
@@ -375,9 +380,10 @@ export default class TodoListExtension extends Extension {
             y_align: Clutter.ActorAlign.CENTER,
         });
         settingsBtn.connect('clicked', () => {
-            // Close the menu first
-            // @ts-expect-error - close() works without animation argument
-            this.button?.menu.close();
+            // Close the menu first (see GNOME.md for cross-version workarounds)
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore - GNOME 46: boolean, GNOME 49: PopupAnimation. -1 works for both.
+            this.button?.menu.close(-1);
             // Open extension preferences
             this.openPreferences();
         });
@@ -866,7 +872,8 @@ export default class TodoListExtension extends Extension {
                 ...task,
                 isFocused: !isFocused,
             });
-            this._populate();
+            // Only update panel text if pin-in-panel feature is enabled
+            this._populate(this._showPinnedInPanel);
         });
 
         // Move to end of group button (optional)
@@ -1122,7 +1129,7 @@ export default class TodoListExtension extends Extension {
 
         if (scrollToTop) {
             // Scroll to top to make the confirmation visible
-            this.scrollView?.get_vscroll_bar()?.get_adjustment()?.set_value(0);
+            this.scrollView?.vadjustment?.set_value(0);
         }
 
         // Clear previous timeout if any
