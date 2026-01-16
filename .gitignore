@@ -11,5 +11,4 @@ prefs.js
 # Generated files
 build-info.json
 schemas/gschemas.compiled
-
-yarn.lock
+package-lock.json

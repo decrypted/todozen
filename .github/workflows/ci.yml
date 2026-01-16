@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  check:
+    name: Check & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: yarn install --frozen-lockfile
+
+      - name: TypeScript check
+        run: yarn tsc --noEmit
+
+      - name: ESLint
+        run: yarn lint
+
+      - name: Run tests
+        run: yarn test
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libglib2.0-bin
+
+      - name: Build extension
+        run: |
+          yarn build
+          echo '{"buildTime":"'$(date -u '+%Y-%m-%d %H:%M:%S UTC')'"}' > build-info.json
+          glib-compile-schemas ./schemas
+
+      - name: Prepare extension files
+        run: |
+          mkdir -p dist
+          cp extension.js manager.js history.js prefs.js dist/
+          cp metadata.json stylesheet.css prefs.ui build-info.json LICENSE dist/
+          cp -r schemas dist/
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: todozen-extension
+          path: dist/
+          retention-days: 30

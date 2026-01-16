@@ -29,14 +29,22 @@ echo "######## Compiling GSettings schemas ########"
 make schemas
 
 # -----------------------------
+# Generate build info
+# -----------------------------
+echo "######## Generating build info ########"
+echo '{"buildTime":"'$(date -u '+%Y-%m-%d %H:%M:%S UTC')'"}' > build-info.json
+
+# -----------------------------
 # Copy required files
 # -----------------------------
 echo "######## Copying files to build directory ########"
 cp -r schemas "$BUILD_DIR"
-cp *.js "$BUILD_DIR"
+cp extension.js manager.js history.js prefs.js "$BUILD_DIR"
 cp stylesheet.css "$BUILD_DIR"
 cp metadata.json "$BUILD_DIR"
-cp LICENCE "$BUILD_DIR"
+cp prefs.ui "$BUILD_DIR"
+cp build-info.json "$BUILD_DIR"
+cp LICENSE "$BUILD_DIR"
 
 # -----------------------------
 # Zip the extension
