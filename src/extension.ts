@@ -53,6 +53,7 @@ export default class TodoListExtension extends Extension {
     _lastError?: ExtensionError | null;
     _isEditing: boolean = false;
     _taskItems: PopupMenu.PopupMenuItem[] = [];
+    _editingTaskId: string | null = null;
     _popupWidthMode: string = 'normal';
     _popupWidthChangedId?: number | null;
 
@@ -115,6 +116,10 @@ export default class TodoListExtension extends Extension {
             if (isOpen && this._needsPopulate) {
                 this._populate();
                 this._needsPopulate = false;
+            }
+            // Cancel any in-progress edit when menu closes
+            if (!isOpen && this._editingTaskId) {
+                this._cancelEdit();
             }
         });
     }
@@ -359,21 +364,26 @@ export default class TodoListExtension extends Extension {
 
         this.input.clutterText.connect("activate", (source) => {
             const taskText = source.get_text().trim();
-            // Exit edit mode before any changes
-            if (this._isEditing) {
+
+            if (this._editingTaskId && taskText) {
+                // Update existing task
+                this._updateTaskById(this._editingTaskId, taskText);
+                this._editingTaskId = null;
                 this._exitEditMode();
-            }
-            if (taskText) {
+                source.set_text("");
+                this._populate(true);
+            } else if (taskText) {
+                // Add new task
                 this._addTask(taskText);
                 source.set_text("");
-                source.grab_key_focus();
             }
+            source.grab_key_focus();
         });
 
-        // Exit edit mode when input loses focus
+        // Cancel edit when input loses focus
         this.input.clutterText.connect("key-focus-out", () => {
-            if (this._isEditing) {
-                this._exitEditMode();
+            if (this._editingTaskId) {
+                this._cancelEdit();
             }
         });
 
@@ -542,6 +552,8 @@ export default class TodoListExtension extends Extension {
             // Render tasks if expanded
             if (isExpanded) {
                 groupTasks.forEach(({ task, index }) => {
+                    // Skip the task being edited (it's shown in the input field)
+                    if (task.id === this._editingTaskId) return;
                     if (!task.isDone) totalUndone++;
                     this._addTodoItem(task, index);
                 });
@@ -596,6 +608,15 @@ export default class TodoListExtension extends Extension {
     _addTask(task: string) {
         this._manager?.add(task, this._selectedGroupId);
         this._populate(true);
+    }
+
+    _updateTaskById(taskId: string, newName: string) {
+        const todos = this._manager?.getParsed() || [];
+        const index = todos.findIndex(t => t.id === taskId);
+        if (index !== -1) {
+            const task = todos[index];
+            this._manager?.update(index, { ...task, name: newName });
+        }
     }
 
     _addTodoItem(task: Task, index: number) {
@@ -829,14 +850,14 @@ export default class TodoListExtension extends Extension {
         );
     }
 
-    _renameTask(task: Task, index: number) {
+    _renameTask(task: Task, _index: number) {
+        // Store the task ID being edited (task stays in list)
+        this._editingTaskId = task.id;
+
         // Put the task text in the input field
         this.input?.set_text(task.name);
 
-        // Remove the task from the list
-        this._manager?.remove(index);
-
-        // Refresh the view to remove the task from display
+        // Refresh to hide the task being edited
         this._populate(true);
 
         // Enter edit mode - disable hover on task items
@@ -847,6 +868,16 @@ export default class TodoListExtension extends Extension {
 
         // Select all text for easy editing
         this.input?.clutterText.set_selection(0, -1);
+    }
+
+    _cancelEdit() {
+        if (!this._editingTaskId) return;
+
+        // Clear edit state - task is still in the list, just show it again
+        this._editingTaskId = null;
+        this.input?.set_text('');
+        this._exitEditMode();
+        this._populate(true);
     }
 
     _enterEditMode() {
@@ -1055,6 +1086,7 @@ export default class TodoListExtension extends Extension {
         this._expandedGroups.clear();
         this._taskItems = [];
         this._isEditing = false;
+        this._editingTaskId = null;
         this._manager?.destroy();
         this._manager = null;
         this._settings = null;

@@ -246,6 +246,36 @@ export function moveTaskToTop(todos: string[], index: number, updatedTask: Task)
 }
 
 /**
+ * Find task index by ID.
+ * @param tasks - Array of tasks
+ * @param taskId - ID to find
+ * @returns Index of task or -1 if not found
+ */
+export function findTaskIndexById(tasks: Task[], taskId: string): number {
+    return tasks.findIndex(t => t.id === taskId);
+}
+
+/**
+ * Update a task's name by ID in a JSON string array.
+ * @param todos - Array of task JSON strings
+ * @param taskId - ID of task to update
+ * @param newName - New name for the task
+ * @returns Updated array, or original if task not found
+ */
+export function updateTaskNameById(todos: string[], taskId: string, newName: string): string[] {
+    const result = [...todos];
+    for (let i = 0; i < result.length; i++) {
+        const task: Task = JSON.parse(result[i]);
+        if (task.id === taskId) {
+            task.name = newName;
+            result[i] = JSON.stringify(task);
+            return result;
+        }
+    }
+    return result;
+}
+
+/**
  * Move all tasks from one group to another.
  * @param todos - Array of task JSON strings
  * @param fromGroupId - Source group ID

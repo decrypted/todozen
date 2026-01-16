@@ -17,6 +17,8 @@ import {
     countUndoneTasks,
     insertTaskAtCorrectPosition,
     moveTaskToTop,
+    findTaskIndexById,
+    updateTaskNameById,
     moveTasksToGroup,
     HistoryAction,
     HistoryEntry,
@@ -503,6 +505,72 @@ describe('moveTaskToTop', () => {
 
         moveTaskToTop(todos, 1, updatedTask);
         expect(todos).toEqual(original);
+    });
+});
+
+describe('findTaskIndexById', () => {
+    const tasks: Task[] = [
+        { version: 1, id: 'task_1', name: 'First', isDone: false },
+        { version: 1, id: 'task_2', name: 'Second', isDone: true },
+        { version: 1, id: 'task_3', name: 'Third', isDone: false },
+    ];
+
+    it('should find task by ID', () => {
+        expect(findTaskIndexById(tasks, 'task_2')).toBe(1);
+    });
+
+    it('should return -1 for non-existent ID', () => {
+        expect(findTaskIndexById(tasks, 'task_999')).toBe(-1);
+    });
+
+    it('should return -1 for empty array', () => {
+        expect(findTaskIndexById([], 'task_1')).toBe(-1);
+    });
+});
+
+describe('updateTaskNameById', () => {
+    it('should update task name by ID', () => {
+        const todos = [
+            JSON.stringify({ id: 'task_1', name: 'Original', isDone: false }),
+            JSON.stringify({ id: 'task_2', name: 'Other', isDone: false }),
+        ];
+        const result = updateTaskNameById(todos, 'task_1', 'Updated');
+        expect(JSON.parse(result[0]).name).toBe('Updated');
+        expect(JSON.parse(result[1]).name).toBe('Other');
+    });
+
+    it('should return original array if ID not found', () => {
+        const todos = [
+            JSON.stringify({ id: 'task_1', name: 'Original', isDone: false }),
+        ];
+        const result = updateTaskNameById(todos, 'task_999', 'Updated');
+        expect(JSON.parse(result[0]).name).toBe('Original');
+    });
+
+    it('should not mutate original array', () => {
+        const todos = [
+            JSON.stringify({ id: 'task_1', name: 'Original', isDone: false }),
+        ];
+        const original = [...todos];
+        updateTaskNameById(todos, 'task_1', 'Updated');
+        expect(todos).toEqual(original);
+    });
+
+    it('should preserve other task properties', () => {
+        const todos = [
+            JSON.stringify({ id: 'task_1', name: 'Original', isDone: true, groupId: 'work', isFocused: true }),
+        ];
+        const result = updateTaskNameById(todos, 'task_1', 'Updated');
+        const task = JSON.parse(result[0]);
+        expect(task.name).toBe('Updated');
+        expect(task.isDone).toBe(true);
+        expect(task.groupId).toBe('work');
+        expect(task.isFocused).toBe(true);
+    });
+
+    it('should handle empty array', () => {
+        const result = updateTaskNameById([], 'task_1', 'Updated');
+        expect(result).toEqual([]);
     });
 });
 
