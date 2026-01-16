@@ -30,13 +30,17 @@ TodoZen is a GNOME Shell extension for managing tasks with minimal CPU usage. It
 
 When adding a new `.ts` file to `src/`, you MUST update these locations:
 
-1. **`Makefile` line ~39** - Add the `.js` filename to the `cp` command in the `install` target
+1. **`Makefile` JS_FILES variable (line ~32)** - Single source of truth for JS files
 2. **`build.sh` line ~42** - Add the `.js` filename to the `cp` command
-3. **`Makefile` verify-dist target** - Add the `.js` filename to the file list
+
+The `JS_FILES` variable in Makefile is used by:
+- `make install` - local installation
+- `make dist` - CI artifact creation
+- `make verify-dist` - distribution verification
 
 If you forget, `make check` will fail with "ERROR: Missing files in zip: yourfile.js".
 
-Current source files: `extension.js`, `manager.js`, `history.js`, `prefs.js`, `utils.js`
+Current JS_FILES: `extension.js manager.js history.js prefs.js utils.js`
 
 ## Build & Install
 ```bash
@@ -54,8 +58,9 @@ After install, logout/login is required (Wayland limitation - see wayland.md).
 ### Key Files
 - `src/extension.ts` - Main extension UI (PanelMenu.Button, popup menu, task list)
 - `src/manager.ts` - Data layer (Task/Group CRUD via GSettings)
+- `src/utils.ts` - Pure functions (URL extraction, validation, task operations) - fully unit tested
 - `src/history.ts` - JSONL logging to `~/.config/todozen/history.jsonl`
-- `src/prefs.ts` - Settings UI (panel position, history toggle)
+- `src/prefs.ts` - Settings UI (panel position, popup width, history toggle)
 - `prefs.ui` - GTK4/Libadwaita preferences UI definition
 - `schemas/org.gnome.shell.extensions.todozen.gschema.xml` - GSettings schema
 
@@ -90,6 +95,7 @@ Logged to JSONL when `enable-history` is true:
 - `last-selected-group` - string (group ID for new tasks)
 - `filter-group` - string (filter display by group, empty = all)
 - `panel-position` - enum (left, center-left, center, center-right, right)
+- `popup-width` - enum (normal=500px, wide=700px, ultra=900px)
 - `enable-history` - boolean
 - `open-todozen` - keybinding (default Alt+Shift+Space)
 
@@ -114,3 +120,31 @@ On load, tasks/groups without `version` field are migrated:
 - Groups get: version=1
 
 Migrations are saved back to GSettings immediately.
+
+## IMPORTANT: Task Identification is ID-Based
+
+**All task operations MUST use `task.id` for identification, NEVER `task.name`.**
+
+The manager uses array index for GSettings operations, but the index is always found by ID:
+```typescript
+// CORRECT: Find by ID, operate by index
+const index = todos.findIndex(t => t.id === taskId);
+this._manager?.update(index, updatedTask);
+
+// WRONG: Never match by name
+const index = todos.findIndex(t => t.name === taskName); // DON'T DO THIS
+```
+
+The `name` field is only used for:
+- Display (showing task text in UI)
+- Validation (ensuring task has a name)
+- History logging (detecting renames)
+- Confirmation dialogs (UX)
+
+### Edit/Rename Behavior (v3.3.0+)
+When editing a task:
+1. Store `_editingTaskId` (task stays in list, just hidden from display)
+2. On submit: find task by ID, update with new name
+3. On cancel (close popup/lose focus): clear `_editingTaskId`, task reappears
+
+**Never delete a task when entering edit mode** - this caused data loss in v3.2.0 if edit was cancelled.

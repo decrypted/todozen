@@ -1,3 +1,12 @@
+# Distribution files (single source of truth)
+JS_FILES = extension.js manager.js history.js prefs.js utils.js
+STATIC_FILES = metadata.json stylesheet.css prefs.ui
+EXTENSION_FILES = $(JS_FILES) $(STATIC_FILES) build-info.json
+
+# Extension info
+UUID = todozen@irtesaam.github.io
+DEST = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
+
 .PHONY: start
 start:
 	dbus-run-session -- gnome-shell --nested --wayland
@@ -14,12 +23,13 @@ build:
 	yarn build
 	@echo '{"buildTime":"'$$(date -u '+%Y-%m-%d %H:%M:%S UTC')'"}' > build-info.json
 
-clean_build:
-	rm build *.zip *.js build-info.json -rf
+.PHONY: clean
+clean:
+	rm -rf build dist $(JS_FILES) build-info.json schemas/gschemas.compiled
 
 # run build
 .PHONY: run
-dev: clean_build build start
+dev: clean build start
 
 # pack for distribution
 .PHONY: pack
@@ -28,15 +38,11 @@ pack:
 	rm *.zip -rf
 	sh build.sh
 
-# install to local gnome-shell extensions
-UUID = todozen@irtesaam.github.io
-DEST = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
-
 .PHONY: install
 install: build schemas
 	rm -rf $(DEST)
 	mkdir -p $(DEST)/schemas
-	cp extension.js manager.js history.js prefs.js utils.js metadata.json stylesheet.css prefs.ui build-info.json $(DEST)/
+	cp $(EXTENSION_FILES) $(DEST)/
 	cp schemas/* $(DEST)/schemas/
 	@echo "Installed to $(DEST)"
 	@echo "On Wayland: log out and back in to activate"
@@ -46,6 +52,14 @@ install: build schemas
 uninstall:
 	rm -rf $(DEST)
 	@echo "Uninstalled $(UUID)"
+
+# create dist directory for CI artifacts
+.PHONY: dist
+dist: build schemas
+	rm -rf dist
+	mkdir -p dist/schemas
+	cp $(EXTENSION_FILES) LICENSE dist/
+	cp schemas/* dist/schemas/
 
 # Testing and linting
 .PHONY: test
@@ -74,7 +88,7 @@ verify-dist: pack
 	@TMPDIR=$$(mktemp -d) && \
 	unzip -q $(UUID).zip -d $$TMPDIR && \
 	MISSING="" && \
-	for f in extension.js manager.js history.js prefs.js utils.js metadata.json stylesheet.css prefs.ui schemas/org.gnome.shell.extensions.todozen.gschema.xml; do \
+	for f in $(JS_FILES) $(STATIC_FILES) schemas/org.gnome.shell.extensions.todozen.gschema.xml; do \
 		if [ ! -f "$$TMPDIR/$$f" ]; then \
 			MISSING="$$MISSING $$f"; \
 		fi; \
