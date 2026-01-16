@@ -28,19 +28,15 @@ TodoZen is a GNOME Shell extension for managing tasks with minimal CPU usage. It
 
 ## IMPORTANT: Adding New TypeScript Files
 
-When adding a new `.ts` file to `src/`, you MUST update these locations:
+When adding a new `.ts` file to `src/`, update `JS_FILES` at the top of **`Makefile`**:
 
-1. **`Makefile` JS_FILES variable (line ~32)** - Single source of truth for JS files
-2. **`build.sh` line ~42** - Add the `.js` filename to the `cp` command
+```makefile
+JS_FILES = extension.js manager.js history.js prefs.js utils.js
+```
 
-The `JS_FILES` variable in Makefile is used by:
-- `make install` - local installation
-- `make dist` - CI artifact creation
-- `make verify-dist` - distribution verification
+This variable is used by all build targets (`make install`, `make pack`, `make dist`, `make verify-dist`).
 
 If you forget, `make check` will fail with "ERROR: Missing files in zip: yourfile.js".
-
-Current JS_FILES: `extension.js manager.js history.js prefs.js utils.js`
 
 ## Build & Install
 ```bash
@@ -48,7 +44,9 @@ make build      # Compile TypeScript
 make schemas    # Compile GSettings schemas
 make install    # Install to ~/.local/share/gnome-shell/extensions/
 make uninstall  # Remove extension
-make dist       # Create distributable zip
+make pack       # Create distributable zip
+make dist       # Create dist/ directory (for CI)
+make clean      # Remove build artifacts
 ```
 
 After install, logout/login is required (Wayland limitation - see wayland.md).

@@ -25,18 +25,21 @@ build:
 
 .PHONY: clean
 clean:
-	rm -rf build dist $(JS_FILES) build-info.json schemas/gschemas.compiled
+	rm -rf build dist $(JS_FILES) $(UUID).zip build-info.json schemas/gschemas.compiled
 
 # run build
 .PHONY: run
 dev: clean build start
 
-# pack for distribution
+# pack for distribution (creates zip file)
 .PHONY: pack
-pack:
-	rm build -rf
-	rm *.zip -rf
-	sh build.sh
+pack: build schemas
+	rm -rf build *.zip
+	mkdir -p build/schemas
+	cp $(EXTENSION_FILES) LICENSE build/
+	cp schemas/* build/schemas/
+	cd build && zip -r ../$(UUID).zip . -x "*.git*" -x "*.DS_Store"
+	@echo "Created $(UUID).zip"
 
 .PHONY: install
 install: build schemas
