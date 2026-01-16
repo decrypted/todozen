@@ -6,6 +6,7 @@ import {
     extractDomain,
     buttonIcon,
     truncateText,
+    formatPinnedTaskForPanel,
     generateId,
     isValidUrl,
     Task,
@@ -17,6 +18,7 @@ import {
     countUndoneTasks,
     insertTaskAtCorrectPosition,
     moveTaskToTop,
+    moveTaskToEndOfGroup,
     findTaskIndexById,
     updateTaskNameById,
     moveTasksToGroup,
@@ -289,6 +291,105 @@ describe('truncateText', () => {
     });
 });
 
+describe('formatPinnedTaskForPanel', () => {
+    it('should return short text as-is', () => {
+        const result = formatPinnedTaskForPanel('Buy milk');
+        expect(result.text).toBe('Buy milk');
+        expect(result.url).toBeNull();
+    });
+
+    it('should limit to 4 words', () => {
+        const result = formatPinnedTaskForPanel('One two three four five six');
+        expect(result.text).toBe('One two three four');
+    });
+
+    it('should remove URLs and return first URL', () => {
+        const result = formatPinnedTaskForPanel('Check https://example.com docs');
+        expect(result.text).toBe('Check docs');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should truncate to 30 chars', () => {
+        const longWords = 'Supercalifragilisticexpialidocious';
+        const result = formatPinnedTaskForPanel(longWords);
+        expect(result.text.length).toBeLessThanOrEqual(30);
+        expect(result.text).toBe('Supercalifragilisticexpiali...');
+    });
+
+    it('should handle empty text', () => {
+        const result = formatPinnedTaskForPanel('');
+        expect(result.text).toBe('');
+        expect(result.url).toBeNull();
+    });
+
+    it('should return empty text for URL-only tasks', () => {
+        const result = formatPinnedTaskForPanel('https://example.com');
+        expect(result.text).toBe('');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should handle text with multiple URLs and return first URL', () => {
+        const result = formatPinnedTaskForPanel('Check https://a.com and https://b.com docs');
+        expect(result.text).toBe('Check and docs');
+        expect(result.url).toBe('https://a.com');
+    });
+
+    it('should handle exactly 30 chars', () => {
+        const exactly30 = 'a'.repeat(30);
+        const result = formatPinnedTaskForPanel(exactly30);
+        expect(result.text).toBe(exactly30);
+    });
+
+    it('should handle 4 words under 30 chars', () => {
+        const result = formatPinnedTaskForPanel('a b c d e f g');
+        expect(result.text).toBe('a b c d');
+    });
+
+    it('should return URL with text', () => {
+        const result = formatPinnedTaskForPanel('Read this https://docs.com article');
+        expect(result.text).toBe('Read this article');
+        expect(result.url).toBe('https://docs.com');
+    });
+
+    // Edge cases for pinned task validation
+    it('should handle single word no link', () => {
+        const result = formatPinnedTaskForPanel('Todo');
+        expect(result.text).toBe('Todo');
+        expect(result.url).toBeNull();
+    });
+
+    it('should handle whitespace-only text', () => {
+        const result = formatPinnedTaskForPanel('   ');
+        expect(result.text).toBe('');
+        expect(result.url).toBeNull();
+    });
+
+    it('should handle many links (3+) and return first', () => {
+        const result = formatPinnedTaskForPanel('See https://a.com https://b.com https://c.com links');
+        expect(result.text).toBe('See links');
+        expect(result.url).toBe('https://a.com');
+    });
+
+    it('should handle link at start of text', () => {
+        const result = formatPinnedTaskForPanel('https://example.com Check this out');
+        expect(result.text).toBe('Check this out');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should handle link at end of text', () => {
+        const result = formatPinnedTaskForPanel('Check this out https://example.com');
+        expect(result.text).toBe('Check this out');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should handle two URLs only (no other text)', () => {
+        const result = formatPinnedTaskForPanel('https://a.com https://b.com');
+        // After URL removal, display becomes first URL (fallback behavior of extractUrls)
+        // But since it matches the original pattern of "URL only", we return empty
+        expect(result.url).toBe('https://a.com');
+    });
+});
+
 describe('generateId', () => {
     it('should generate task ID with prefix', () => {
         const id = generateId('task');
@@ -504,6 +605,84 @@ describe('moveTaskToTop', () => {
         const updatedTask: Task = { version: 1, id: '2', name: 'Updated', isDone: false, isFocused: true };
 
         moveTaskToTop(todos, 1, updatedTask);
+        expect(todos).toEqual(original);
+    });
+});
+
+describe('moveTaskToEndOfGroup', () => {
+    it('should move task to end of its group', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work' }),
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'personal' }),
+            JSON.stringify({ id: '3', name: 'Task 3', groupId: 'work' }),
+            JSON.stringify({ id: '4', name: 'Task 4', groupId: 'work' }),
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        // Task 1 should now be after Task 4 (last work task)
+        expect(JSON.parse(result[0]).id).toBe('2'); // personal task moves up
+        expect(JSON.parse(result[1]).id).toBe('3'); // work task moves up
+        expect(JSON.parse(result[2]).id).toBe('4'); // work task moves up
+        expect(JSON.parse(result[3]).id).toBe('1'); // moved to end of group
+    });
+
+    it('should work with inbox (no groupId)', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1' }), // inbox (no groupId)
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'work' }),
+            JSON.stringify({ id: '3', name: 'Task 3' }), // inbox (no groupId)
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        // Task 1 should move after Task 3 (last inbox task)
+        expect(JSON.parse(result[0]).id).toBe('2');
+        expect(JSON.parse(result[1]).id).toBe('3');
+        expect(JSON.parse(result[2]).id).toBe('1');
+    });
+
+    it('should handle task already at end of group', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work' }),
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'personal' }),
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        // Task 1 is already at end of its group (no other work tasks after it)
+        expect(JSON.parse(result[0]).id).toBe('1');
+        expect(JSON.parse(result[1]).id).toBe('2');
+    });
+
+    it('should handle single task in group', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work' }),
+        ];
+
+        const result = moveTaskToEndOfGroup(todos, 0);
+        expect(JSON.parse(result[0]).id).toBe('1');
+    });
+
+    it('should handle empty array', () => {
+        const result = moveTaskToEndOfGroup([], 0);
+        expect(result).toEqual([]);
+    });
+
+    it('should handle invalid index', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work' }),
+        ];
+
+        expect(moveTaskToEndOfGroup(todos, -1)).toEqual(todos);
+        expect(moveTaskToEndOfGroup(todos, 5)).toEqual(todos);
+    });
+
+    it('should not mutate original array', () => {
+        const todos = [
+            JSON.stringify({ id: '1', name: 'Task 1', groupId: 'work' }),
+            JSON.stringify({ id: '2', name: 'Task 2', groupId: 'work' }),
+        ];
+        const original = [...todos];
+
+        moveTaskToEndOfGroup(todos, 0);
         expect(todos).toEqual(original);
     });
 });

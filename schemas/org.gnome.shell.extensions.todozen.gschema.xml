@@ -57,5 +57,15 @@
       <summary>Popup width</summary>
       <description>Width of the popup menu: normal (500px), wide (700px), ultra (900px)</description>
     </key>
+    <key name="show-move-to-end-button" type="b">
+      <default>false</default>
+      <summary>Show move to end button</summary>
+      <description>Show a button to move tasks to the end of their group</description>
+    </key>
+    <key name="show-pinned-in-panel" type="b">
+      <default>false</default>
+      <summary>Show pinned task in panel</summary>
+      <description>Show the focused/pinned task description in the top panel (max 4 words, 30 chars)</description>
+    </key>
   </schema>
 </schemalist>

@@ -109,6 +109,38 @@ export function truncateText(text: string, maxLength: number = 40): string {
 }
 
 /**
+ * Format pinned task for panel display.
+ * Removes URLs, limits to max 4 words and 30 characters.
+ * Returns empty string for URL-only tasks.
+ * @param text - The task text to format
+ * @returns Object with formatted text and first URL (if any)
+ */
+export function formatPinnedTaskForPanel(text: string): { text: string; url: string | null } {
+    // Extract URLs
+    const { displayText, urls } = extractUrls(text);
+    const firstUrl = urls.length > 0 ? urls[0] : null;
+
+    // If display text is same as original (URL-only case), return empty
+    if (displayText === text && urls.length > 0) {
+        return { text: '', url: firstUrl };
+    }
+
+    // Split into words and take max 4
+    const words = displayText.split(/\s+/).filter(w => w.length > 0);
+    const limitedWords = words.slice(0, 4).join(' ');
+
+    // Truncate to max 30 chars
+    let result: string;
+    if (limitedWords.length <= 30) {
+        result = limitedWords;
+    } else {
+        result = limitedWords.substring(0, 27) + '...';
+    }
+
+    return { text: result, url: firstUrl };
+}
+
+/**
  * Generate a unique ID for tasks.
  * @param prefix - ID prefix (default "task")
  * @returns Unique ID string
@@ -246,6 +278,44 @@ export function moveTaskToTop(todos: string[], index: number, updatedTask: Task)
 }
 
 /**
+ * Move a task to the end of its group.
+ * @param todos - Array of task JSON strings
+ * @param index - Index of task to move
+ * @returns Updated array with task moved to end of its group
+ */
+export function moveTaskToEndOfGroup(todos: string[], index: number): string[] {
+    if (todos.length === 0 || index < 0 || index >= todos.length) {
+        return [...todos];
+    }
+
+    const result = [...todos];
+    const task: Task = JSON.parse(result[index]);
+    const taskGroupId = task.groupId || 'inbox';
+
+    // Find the last task with the same groupId
+    let lastIndexInGroup = index;
+    for (let i = todos.length - 1; i > index; i--) {
+        const otherTask: Task = JSON.parse(todos[i]);
+        const otherGroupId = otherTask.groupId || 'inbox';
+        if (otherGroupId === taskGroupId) {
+            lastIndexInGroup = i;
+            break;
+        }
+    }
+
+    // If already at end of group, no need to move
+    if (lastIndexInGroup === index) {
+        return result;
+    }
+
+    // Remove the task from its current position and insert after the last task in group
+    const [removed] = result.splice(index, 1);
+    result.splice(lastIndexInGroup, 0, removed);
+
+    return result;
+}
+
+/**
  * Find task index by ID.
  * @param tasks - Array of tasks
  * @param taskId - ID to find
@@ -304,6 +374,7 @@ export type HistoryAction =
     | 'renamed'
     | 'cleared_all'
     | 'moved_group'
+    | 'moved_to_end'
     | 'group_created'
     | 'group_renamed'
     | 'group_deleted';

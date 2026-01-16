@@ -44,6 +44,22 @@ export default class TodoZenPreferences extends ExtensionPreferences {
             Gio.SettingsBindFlags.DEFAULT
         );
 
+        // Bind move-to-end button toggle
+        settings.bind(
+            'show-move-to-end-button',
+            ui.get_object('show-move-to-end-button'),
+            'active',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+
+        // Bind show-pinned-in-panel toggle
+        settings.bind(
+            'show-pinned-in-panel',
+            ui.get_object('show-pinned-in-panel'),
+            'active',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+
         // Sync UI from settings
         const updatePositionUI = () => {
             if (this._inhibitor) return;

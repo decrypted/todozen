@@ -9,7 +9,7 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { Task, TodoListManager } from "./manager.js";
-import { extractUrls, extractDomain, buttonIcon, truncateText, createExtensionError, formatErrorForLog, ExtensionError } from "./utils.js";
+import { extractUrls, extractDomain, buttonIcon, truncateText, formatPinnedTaskForPanel, createExtensionError, formatErrorForLog, ExtensionError } from "./utils.js";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
 import GLib from "gi://GLib";
@@ -56,6 +56,14 @@ export default class TodoListExtension extends Extension {
     _editingTaskId: string | null = null;
     _popupWidthMode: string = 'normal';
     _popupWidthChangedId?: number | null;
+    _showMoveToEndButton: boolean = false;
+    _showMoveToEndChangedId?: number | null;
+    _showPinnedInPanel: boolean = false;
+    _showPinnedInPanelChangedId?: number | null;
+    _buttonBox?: St.BoxLayout | null;
+    _pinnedLabel?: St.Label | null;
+    _pinnedLinkBtn?: St.Button | null;
+    _pinnedUrl?: string | null;
 
     enable() {
         try {
@@ -73,12 +81,55 @@ export default class TodoListExtension extends Extension {
         this.button = new PanelMenu.Button(0.0, this.metadata.name, false);
         this._manager = new TodoListManager(this);
 
+        // Create a box to hold count + pinned text + link icon
+        this._buttonBox = new St.BoxLayout({
+            vertical: false,
+            style: 'spacing: 6px;',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+
         this.buttonText = new St.Label({
             text: buttonIcon(this._manager.getTotalUndone()),
             y_align: Clutter.ActorAlign.CENTER,
         });
         this.buttonText.set_style("text-align:center;");
-        this.button.add_child(this.buttonText);
+
+        // Pinned task label (initially hidden)
+        this._pinnedLabel = new St.Label({
+            text: '',
+            y_align: Clutter.ActorAlign.CENTER,
+            style: 'font-style: italic;',
+        });
+        this._pinnedLabel.hide();
+
+        // Link button (initially hidden)
+        this._pinnedLinkBtn = new St.Button({
+            child: new St.Icon({
+                icon_name: 'web-browser-symbolic',
+                style_class: 'system-status-icon',
+                style: 'icon-size: 14px;',
+            }),
+            style_class: 'panel-button',
+            style: 'padding: 0 4px;',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+        this._pinnedLinkBtn.connect('clicked', () => {
+            if (this._pinnedUrl) {
+                try {
+                    Gio.AppInfo.launch_default_for_uri(this._pinnedUrl, null);
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    Main.notify("Failed to open URL", msg);
+                }
+            }
+            return Clutter.EVENT_STOP;
+        });
+        this._pinnedLinkBtn.hide();
+
+        this._buttonBox.add_child(this.buttonText);
+        this._buttonBox.add_child(this._pinnedLabel);
+        this._buttonBox.add_child(this._pinnedLinkBtn);
+        this.button.add_child(this._buttonBox);
         this._indicator = this.button;
 
         // Add to panel at configured position
@@ -94,6 +145,20 @@ export default class TodoListExtension extends Extension {
         this._popupWidthChangedId = this._settings.connect('changed::popup-width', () => {
             this._popupWidthMode = this._settings?.get_string('popup-width') || 'normal';
             this._applyPopupWidth();
+        });
+
+        // Load move-to-end button setting
+        this._showMoveToEndButton = this._settings.get_boolean('show-move-to-end-button');
+        this._showMoveToEndChangedId = this._settings.connect('changed::show-move-to-end-button', () => {
+            this._showMoveToEndButton = this._settings?.get_boolean('show-move-to-end-button') ?? false;
+            this._needsPopulate = true;
+        });
+
+        // Load show-pinned-in-panel setting
+        this._showPinnedInPanel = this._settings.get_boolean('show-pinned-in-panel');
+        this._showPinnedInPanelChangedId = this._settings.connect('changed::show-pinned-in-panel', () => {
+            this._showPinnedInPanel = this._settings?.get_boolean('show-pinned-in-panel') ?? false;
+            this._updateButtonText();
         });
 
         this._buildPopupMenu();
@@ -804,6 +869,24 @@ export default class TodoListExtension extends Extension {
             this._populate();
         });
 
+        // Move to end of group button (optional)
+        let moveToEndButton: St.Button | null = null;
+        if (this._showMoveToEndButton) {
+            moveToEndButton = new St.Button({
+                child: new St.Icon({
+                    icon_name: "go-bottom-symbolic",
+                    style_class: "btn-icon",
+                }),
+                style_class: "focus-btn",
+                y_align: Clutter.ActorAlign.CENTER,
+                x_align: Clutter.ActorAlign.END,
+            });
+            moveToEndButton.connect("clicked", () => {
+                this._manager?.moveToEndOfGroup(index);
+                this._populate(true);
+            });
+        }
+
         // Create action buttons container for right alignment
         const actionButtonsContainer = new St.BoxLayout({
             vertical: false,
@@ -818,6 +901,9 @@ export default class TodoListExtension extends Extension {
         actionButtonsContainer.add_child(copyButton);
         actionButtonsContainer.add_child(renameButton);
         actionButtonsContainer.add_child(focusButton);
+        if (moveToEndButton) {
+            actionButtonsContainer.add_child(moveToEndButton);
+        }
         actionButtonsContainer.add_child(removeButton);
 
         box.add_child(label);
@@ -834,7 +920,55 @@ export default class TodoListExtension extends Extension {
     }
 
     _setButtonText(count: number) {
+        // Set count text
         this.buttonText?.clutterText.set_text(buttonIcon(count));
+
+        // Handle pinned task display
+        if (this._showPinnedInPanel) {
+            const tasks = this._manager?.getParsed() || [];
+            const pinnedTask = tasks.find(t => t.isFocused && !t.isDone);
+
+            if (pinnedTask) {
+                const { text: pinnedText, url } = formatPinnedTaskForPanel(pinnedTask.name);
+                this._pinnedUrl = url;
+
+                // Show pinned text if available, otherwise show pin indicator
+                if (pinnedText) {
+                    this._pinnedLabel?.set_text(pinnedText);
+                    this._pinnedLabel?.show();
+                } else if (url) {
+                    // URL-only task: show small indicator
+                    this._pinnedLabel?.set_text('📌');
+                    this._pinnedLabel?.show();
+                } else {
+                    // Empty/whitespace task: show pin indicator
+                    this._pinnedLabel?.set_text('📌');
+                    this._pinnedLabel?.show();
+                }
+
+                // Show link button if there's a URL
+                if (url) {
+                    this._pinnedLinkBtn?.show();
+                } else {
+                    this._pinnedLinkBtn?.hide();
+                }
+            } else {
+                // No pinned task
+                this._pinnedLabel?.hide();
+                this._pinnedLinkBtn?.hide();
+                this._pinnedUrl = null;
+            }
+        } else {
+            // Feature disabled
+            this._pinnedLabel?.hide();
+            this._pinnedLinkBtn?.hide();
+            this._pinnedUrl = null;
+        }
+    }
+
+    _updateButtonText() {
+        const count = this._manager?.getTotalUndone() || 0;
+        this._setButtonText(count);
     }
 
     _toggleShortcut() {
@@ -1044,6 +1178,14 @@ export default class TodoListExtension extends Extension {
             this._settings.disconnect(this._popupWidthChangedId);
             this._popupWidthChangedId = null;
         }
+        if (this._showMoveToEndChangedId && this._settings) {
+            this._settings.disconnect(this._showMoveToEndChangedId);
+            this._showMoveToEndChangedId = null;
+        }
+        if (this._showPinnedInPanelChangedId && this._settings) {
+            this._settings.disconnect(this._showPinnedInPanelChangedId);
+            this._showPinnedInPanelChangedId = null;
+        }
 
         // Disconnect menu open-state-changed signal
         if (this._menuOpenStateId && this.button?.menu) {
@@ -1077,6 +1219,10 @@ export default class TodoListExtension extends Extension {
         this.todosBox = null;
         this.scrollView = null;
         this.buttonText = null;
+        this._buttonBox = null;
+        this._pinnedLabel = null;
+        this._pinnedLinkBtn = null;
+        this._pinnedUrl = null;
         this.input = null;
         this.button = null;
         this._indicator = null;

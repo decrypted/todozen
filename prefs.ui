@@ -80,6 +80,18 @@
             </child>
           </object>
         </child>
+        <child>
+          <object class="AdwSwitchRow" id="show-move-to-end-button">
+            <property name="title" translatable="yes">Show move to end button</property>
+            <property name="subtitle" translatable="yes">Show button to move task to end of its group</property>
+          </object>
+        </child>
+        <child>
+          <object class="AdwSwitchRow" id="show-pinned-in-panel">
+            <property name="title" translatable="yes">Show pinned task in panel</property>
+            <property name="subtitle" translatable="yes">Display focused task text in top bar (max 4 words)</property>
+          </object>
+        </child>
       </object>
     </child>
     <child>

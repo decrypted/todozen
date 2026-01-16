@@ -12,6 +12,7 @@ import {
   countUndoneTasks,
   insertTaskAtCorrectPosition,
   moveTaskToTop,
+  moveTaskToEndOfGroup,
   moveTasksToGroup,
   canAddGroup,
   canDeleteGroup,
@@ -145,6 +146,16 @@ export class TodoListManager {
       const newGroup = todo.groupId ? this.getGroup(todo.groupId)?.name : 'Ungrouped';
       this._logIfEnabled('moved_group', { taskId: todo.id, task: todo.name, details: `${oldGroup} -> ${newGroup}` });
     }
+  }
+
+  moveToEndOfGroup(index: number) {
+    const todos = this.get();
+    if (!todos.length || index < 0 || index >= todos.length) return;
+
+    const task: Task = JSON.parse(todos[index]);
+    const updatedTodos = moveTaskToEndOfGroup(todos, index);
+    this.GSettings.set_strv(TODOS, updatedTodos);
+    this._logIfEnabled('moved_to_end', { taskId: task.id, task: task.name });
   }
 
   // ===== Group Methods =====
