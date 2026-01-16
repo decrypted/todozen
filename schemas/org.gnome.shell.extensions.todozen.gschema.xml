@@ -10,6 +10,12 @@
     <value nick="right" value="5"/>
   </enum>
 
+  <enum id="org.gnome.shell.extensions.todozen.popup-width">
+    <value nick="normal" value="1"/>
+    <value nick="wide" value="2"/>
+    <value nick="ultra" value="3"/>
+  </enum>
+
   <schema id="org.gnome.shell.extensions.todozen" path="/org/gnome/shell/extensions/todozen/">
     <key name="todos" type="as">
       <default>[]</default>
@@ -45,6 +51,11 @@
       <default>''</default>
       <summary>Filter by group</summary>
       <description>Show only tasks from this group (empty = show all)</description>
+    </key>
+    <key name="popup-width" enum="org.gnome.shell.extensions.todozen.popup-width">
+      <default>'normal'</default>
+      <summary>Popup width</summary>
+      <description>Width of the popup menu: normal (500px), wide (700px), ultra (900px)</description>
     </key>
   </schema>
 </schemalist>

@@ -1,33 +1,16 @@
 import GLib from 'gi://GLib';
 import Gio from 'gi://Gio';
+import {
+    HistoryAction,
+    HistoryEntry,
+    createHistoryEntry,
+    serializeHistoryEntry,
+} from './utils.js';
 
 const APP_NAME = 'todozen';
 
-export type HistoryAction =
-    | 'added'
-    | 'removed'
-    | 'completed'
-    | 'uncompleted'
-    | 'focused'
-    | 'unfocused'
-    | 'renamed'
-    | 'cleared_all'
-    | 'moved_group'
-    | 'group_created'
-    | 'group_renamed'
-    | 'group_deleted';
-
-interface HistoryEntry {
-    timestamp: string;
-    action: HistoryAction;
-    taskId?: string;
-    task?: string;
-    groupId?: string;
-    group?: string;
-    oldName?: string;
-    newName?: string;
-    details?: string;
-}
+// Re-export for convenience
+export type { HistoryAction };
 
 export class HistoryLogger {
     private _logFile: Gio.File;
@@ -48,22 +31,9 @@ export class HistoryLogger {
         }
     }
 
-    log(action: HistoryAction, data: {
-        taskId?: string;
-        task?: string;
-        groupId?: string;
-        group?: string;
-        oldName?: string;
-        newName?: string;
-        details?: string;
-    } = {}) {
-        const entry: HistoryEntry = {
-            timestamp: new Date().toISOString(),
-            action,
-            ...data,
-        };
-
-        this._appendLine(JSON.stringify(entry));
+    log(action: HistoryAction, data: Omit<HistoryEntry, 'timestamp' | 'action'> = {}) {
+        const entry = createHistoryEntry(action, data);
+        this._appendLine(serializeHistoryEntry(entry));
     }
 
     private _appendLine(line: string) {

@@ -26,6 +26,18 @@ TodoZen is a GNOME Shell extension for managing tasks with minimal CPU usage. It
 3. Unit tests for manager logic
 4. Versioned data model for future migrations
 
+## IMPORTANT: Adding New TypeScript Files
+
+When adding a new `.ts` file to `src/`, you MUST update these locations:
+
+1. **`Makefile` line ~39** - Add the `.js` filename to the `cp` command in the `install` target
+2. **`build.sh` line ~42** - Add the `.js` filename to the `cp` command
+3. **`Makefile` verify-dist target** - Add the `.js` filename to the file list
+
+If you forget, `make check` will fail with "ERROR: Missing files in zip: yourfile.js".
+
+Current source files: `extension.js`, `manager.js`, `history.js`, `prefs.js`, `utils.js`
+
 ## Build & Install
 ```bash
 make build      # Compile TypeScript

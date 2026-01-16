@@ -44,6 +44,23 @@
     background: rgba(100, 149, 237, 0.5);
 }
 
+.link-btn {
+    padding: 10px;
+    border-radius: 50px;
+}
+
+.link-btn .btn-icon {
+    color: #3584e4;
+}
+
+.link-btn:hover {
+    background: rgba(53, 132, 228, 0.3);
+}
+
+.link-btn:active {
+    background: rgba(53, 132, 228, 0.5);
+}
+
 .item {
     padding: 10px;
     display: flex;

@@ -7,8 +7,10 @@ extension.js
 manager.js
 history.js
 prefs.js
+utils.js
 
 # Generated files
 build-info.json
 schemas/gschemas.compiled
 package-lock.json
+*.zip

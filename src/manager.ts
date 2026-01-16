@@ -1,28 +1,28 @@
 import { Extension } from "@girs/gnome-shell/extensions/extension";
 import Gio from "gi://Gio";
-import { HistoryLogger, HistoryAction } from "./history.js";
+import { HistoryLogger } from "./history.js";
+import {
+  Task,
+  Group,
+  HistoryAction,
+  TASK_VERSION,
+  migrateTask,
+  migrateGroup,
+  generateId,
+  countUndoneTasks,
+  insertTaskAtCorrectPosition,
+  moveTaskToTop,
+  moveTasksToGroup,
+  canAddGroup,
+  canDeleteGroup,
+} from "./utils.js";
+
+// Re-export types for convenience
+export type { Task, Group };
 
 const TODOS = "todos";
 const GROUPS = "groups";
 const MAX_GROUPS = 10;
-const TASK_VERSION = 1;
-const GROUP_VERSION = 1;
-
-export interface Group {
-  version: number;
-  id: string;
-  name: string;
-  color: string;
-}
-
-export interface Task {
-  version: number;
-  id: string;
-  name: string;
-  isDone: boolean;
-  isFocused?: boolean;
-  groupId?: string;
-}
 
 export class TodoListManager {
   GSettings: Gio.Settings;
@@ -60,37 +60,6 @@ export class TodoListManager {
     }
   }
 
-  // ===== Migration Methods =====
-
-  private _migrateTask(raw: Record<string, unknown>): Task {
-    // v0 (no version): had name, isDone, isFocused - no id, no groupId
-    if (!raw.version) {
-      return {
-        version: TASK_VERSION,
-        id: this._generateId(),
-        name: raw.name as string,
-        isDone: raw.isDone as boolean,
-        isFocused: raw.isFocused as boolean | undefined,
-        groupId: 'inbox',
-      };
-    }
-    // Already current version
-    return raw as unknown as Task;
-  }
-
-  private _migrateGroup(raw: Record<string, unknown>): Group {
-    // v0 (no version): had id, name, color
-    if (!raw.version) {
-      return {
-        version: GROUP_VERSION,
-        id: raw.id as string,
-        name: raw.name as string,
-        color: raw.color as string,
-      };
-    }
-    // Already current version
-    return raw as unknown as Group;
-  }
 
   // ===== Task Methods =====
 
@@ -109,7 +78,7 @@ export class TodoListManager {
     const tasks = raw.map(t => {
       const parsed = JSON.parse(t);
       if (!parsed.version) needsSave = true;
-      return this._migrateTask(parsed);
+      return migrateTask(parsed);
     });
 
     if (needsSave) {
@@ -126,35 +95,15 @@ export class TodoListManager {
   }
 
   getTotalUndone(groupId?: string): number {
-    const todos = this.getParsed();
-    return todos.filter(t => {
-      const matchesGroup = !groupId || t.groupId === groupId;
-      return !t.isDone && matchesGroup;
-    }).length;
-  }
-
-  private _generateId(): string {
-    return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    return countUndoneTasks(this.getParsed(), groupId);
   }
 
   add(task: string, groupId?: string) {
     const todos = this.get();
-    const newTask: Task = { version: TASK_VERSION, id: this._generateId(), name: task, isDone: false, groupId };
+    const newTask: Task = { version: TASK_VERSION, id: generateId('task'), name: task, isDone: false, groupId };
     const newTaskStr = JSON.stringify(newTask);
-
-    if (todos.length > 0) {
-      const firstTask: Task = JSON.parse(todos[0]);
-      if (firstTask.isFocused) {
-        todos.splice(1, 0, newTaskStr);
-      } else {
-        todos.unshift(newTaskStr);
-      }
-    } else {
-      todos.push(newTaskStr);
-    }
-
-    this.GSettings.set_strv(TODOS, todos);
-
+    const updatedTodos = insertTaskAtCorrectPosition(todos, newTaskStr);
+    this.GSettings.set_strv(TODOS, updatedTodos);
     this._logIfEnabled('added', { taskId: newTask.id, task, group: groupId ? this.getGroup(groupId)?.name : undefined });
   }
 
@@ -178,15 +127,8 @@ export class TodoListManager {
     if (!todos.length) return;
 
     const oldTask: Task = JSON.parse(todos[index]);
-
-    if (todo.isFocused && index > 0) {
-      const tmp = todos[0];
-      todos[0] = JSON.stringify(todo);
-      todos[index] = tmp;
-    } else {
-      todos[index] = JSON.stringify(todo);
-    }
-    this.GSettings.set_strv(TODOS, todos);
+    const updatedTodos = moveTaskToTop(todos, index, todo);
+    this.GSettings.set_strv(TODOS, updatedTodos);
 
     // Log changes
     if (oldTask.name !== todo.name) {
@@ -218,7 +160,7 @@ export class TodoListManager {
     const groups = raw.map(g => {
       const parsed = JSON.parse(g);
       if (!parsed.version) needsSave = true;
-      return this._migrateGroup(parsed);
+      return migrateGroup(parsed);
     });
 
     if (needsSave) {
@@ -235,10 +177,10 @@ export class TodoListManager {
 
   addGroup(name: string, color: string): boolean {
     const groups = this.getGroups();
-    if (groups.length >= MAX_GROUPS) return false;
+    if (!canAddGroup(groups.length, MAX_GROUPS)) return false;
 
-    const id = `group_${Date.now()}`;
-    const newGroup: Group = { version: GROUP_VERSION, id, name, color };
+    const id = generateId('group');
+    const newGroup: Group = { version: 1, id, name, color };
     groups.push(newGroup);
 
     this.GSettings.set_strv(GROUPS, groups.map(g => JSON.stringify(g)));
@@ -262,21 +204,14 @@ export class TodoListManager {
   }
 
   removeGroup(id: string): boolean {
-    if (id === 'inbox') return false; // Can't delete inbox
+    if (!canDeleteGroup(id)) return false;
 
     const groups = this.getGroups();
     const group = groups.find(g => g.id === id);
     if (!group) return false;
 
     // Move tasks from this group to inbox
-    const todos = this.get();
-    const updatedTodos = todos.map(t => {
-      const task: Task = JSON.parse(t);
-      if (task.groupId === id) {
-        task.groupId = 'inbox';
-      }
-      return JSON.stringify(task);
-    });
+    const updatedTodos = moveTasksToGroup(this.get(), id, 'inbox');
     this.GSettings.set_strv(TODOS, updatedTodos);
 
     // Remove group

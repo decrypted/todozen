@@ -39,7 +39,7 @@ echo '{"buildTime":"'$(date -u '+%Y-%m-%d %H:%M:%S UTC')'"}' > build-info.json
 # -----------------------------
 echo "######## Copying files to build directory ########"
 cp -r schemas "$BUILD_DIR"
-cp extension.js manager.js history.js prefs.js "$BUILD_DIR"
+cp extension.js manager.js history.js prefs.js utils.js "$BUILD_DIR"
 cp stylesheet.css "$BUILD_DIR"
 cp metadata.json "$BUILD_DIR"
 cp prefs.ui "$BUILD_DIR"

@@ -75,6 +75,38 @@ export default class TodoZenPreferences extends ExtensionPreferences {
         settings.connect('changed::panel-position', updatePositionUI);
         updatePositionUI();
 
+        // ===== Popup Width =====
+        const widths = ['normal', 'wide', 'ultra'];
+
+        const updateWidthUI = () => {
+            if (this._inhibitor) return;
+            this._inhibitor = true;
+
+            const currentWidth = settings.get_string('popup-width');
+            widths.forEach(w => {
+                const button = ui.get_object(`width-${w}`) as Gtk.ToggleButton;
+                button.set_active(w === currentWidth);
+            });
+
+            this._inhibitor = false;
+        };
+
+        widths.forEach(w => {
+            const button = ui.get_object(`width-${w}`) as Gtk.ToggleButton;
+            button.connect('toggled', () => {
+                if (this._inhibitor) return;
+                if (!button.get_active()) return;
+
+                this._inhibitor = true;
+                settings.set_string('popup-width', w);
+                this._inhibitor = false;
+                updateWidthUI();
+            });
+        });
+
+        settings.connect('changed::popup-width', updateWidthUI);
+        updateWidthUI();
+
         // ===== Groups Management =====
         const groupsList = ui.get_object('groups-list') as Gtk.ListBox;
         const addGroupBtn = ui.get_object('add-group-btn') as Gtk.Button;

@@ -36,7 +36,7 @@ DEST = $(HOME)/.local/share/gnome-shell/extensions/$(UUID)
 install: build schemas
 	rm -rf $(DEST)
 	mkdir -p $(DEST)/schemas
-	cp extension.js manager.js history.js prefs.js metadata.json stylesheet.css prefs.ui build-info.json $(DEST)/
+	cp extension.js manager.js history.js prefs.js utils.js metadata.json stylesheet.css prefs.ui build-info.json $(DEST)/
 	cp schemas/* $(DEST)/schemas/
 	@echo "Installed to $(DEST)"
 	@echo "On Wayland: log out and back in to activate"
@@ -64,4 +64,24 @@ lint-fix:
 check:
 	npm run check
 	npm test
+	@$(MAKE) verify-dist
 	@echo "All checks passed!"
+
+# Verify all required files end up in the distribution zip
+.PHONY: verify-dist
+verify-dist: pack
+	@echo "######## Verifying distribution contents ########"
+	@TMPDIR=$$(mktemp -d) && \
+	unzip -q $(UUID).zip -d $$TMPDIR && \
+	MISSING="" && \
+	for f in extension.js manager.js history.js prefs.js utils.js metadata.json stylesheet.css prefs.ui schemas/org.gnome.shell.extensions.todozen.gschema.xml; do \
+		if [ ! -f "$$TMPDIR/$$f" ]; then \
+			MISSING="$$MISSING $$f"; \
+		fi; \
+	done && \
+	rm -rf $$TMPDIR && \
+	if [ -n "$$MISSING" ]; then \
+		echo "ERROR: Missing files in zip:$$MISSING"; \
+		exit 1; \
+	fi && \
+	echo "All required files present in distribution zip"

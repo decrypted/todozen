@@ -9,14 +9,24 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { Task, TodoListManager } from "./manager.js";
+import { extractUrls, extractDomain, buttonIcon, truncateText, createExtensionError, formatErrorForLog, ExtensionError } from "./utils.js";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
 import GLib from "gi://GLib";
 import Gio from "gi://Gio";
 
-const MAX_WINDOW_WIDTH = 500;
+const POPUP_WIDTHS: Record<string, number> = {
+    'normal': 500,
+    'wide': 700,
+    'ultra': 900,
+};
+const INPUT_WIDTHS: Record<string, number> = {
+    'normal': 380,
+    'wide': 560,
+    'ultra': 760,
+};
 const MAX_INPUT_CHARS = 200;
-const buttonIcon = (total: number) => _(`(✔${total})`);
+const LOG_PATH = '~/.config/todozen/';
 
 export default class TodoListExtension extends Extension {
     _indicator?: PanelMenu.Button | null;
@@ -39,8 +49,25 @@ export default class TodoListExtension extends Extension {
     _needsPopulate: boolean = true;
     _groupsChangedId?: number | null;
     _todosChangedId?: number | null;
+    _errorMode: boolean = false;
+    _lastError?: ExtensionError | null;
+    _isEditing: boolean = false;
+    _taskItems: PopupMenu.PopupMenuItem[] = [];
+    _popupWidthMode: string = 'normal';
+    _popupWidthChangedId?: number | null;
 
     enable() {
+        try {
+            this._enableInternal();
+        } catch (e) {
+            const msg = e instanceof Error ? e.message : String(e);
+            this._lastError = createExtensionError(msg, 'enable');
+            console.error(formatErrorForLog(this._lastError));
+            this._enterErrorMode();
+        }
+    }
+
+    _enableInternal() {
         this._settings = this.getSettings();
         this.button = new PanelMenu.Button(0.0, this.metadata.name, false);
         this._manager = new TodoListManager(this);
@@ -59,6 +86,13 @@ export default class TodoListExtension extends Extension {
         // Listen for position changes
         this._positionChangedId = this._settings.connect('changed::panel-position', () => {
             this._repositionButton();
+        });
+
+        // Load popup width setting
+        this._popupWidthMode = this._settings.get_string('popup-width') || 'normal';
+        this._popupWidthChangedId = this._settings.connect('changed::popup-width', () => {
+            this._popupWidthMode = this._settings?.get_string('popup-width') || 'normal';
+            this._applyPopupWidth();
         });
 
         this._buildPopupMenu();
@@ -83,6 +117,112 @@ export default class TodoListExtension extends Extension {
                 this._needsPopulate = false;
             }
         });
+    }
+
+    _enterErrorMode() {
+        this._errorMode = true;
+
+        // Create minimal error indicator
+        this.button = new PanelMenu.Button(0.0, this.metadata.name, false);
+
+        const errorIcon = new St.Icon({
+            icon_name: 'dialog-error-symbolic',
+            style_class: 'system-status-icon',
+            style: 'color: #e53e3e;',
+        });
+        this.button.add_child(errorIcon);
+        this._indicator = this.button;
+
+        // Add to panel
+        Main.panel.addToStatusArea(this.uuid, this._indicator, 0, 'right');
+
+        // Build error menu
+        this._buildErrorMenu();
+    }
+
+    _buildErrorMenu() {
+        if (!this.button) return;
+
+        const mainBox = new St.BoxLayout({
+            vertical: true,
+            style: `width: ${POPUP_WIDTHS['normal']}px; padding: 16px;`,
+        });
+
+        // Error icon and title
+        const headerBox = new St.BoxLayout({
+            vertical: false,
+            style: 'spacing: 12px; margin-bottom: 16px;',
+        });
+
+        const errorIcon = new St.Icon({
+            icon_name: 'dialog-error-symbolic',
+            style: 'color: #e53e3e;',
+            icon_size: 32,
+        });
+
+        const titleLabel = new St.Label({
+            text: _('TodoZen Error'),
+            style: 'font-size: 16px; font-weight: bold;',
+            y_align: Clutter.ActorAlign.CENTER,
+        });
+
+        headerBox.add_child(errorIcon);
+        headerBox.add_child(titleLabel);
+        mainBox.add_child(headerBox);
+
+        // Error message
+        const errorMsg = this._lastError?.message || _('Unknown error');
+        const messageLabel = new St.Label({
+            text: errorMsg,
+            style: 'margin-bottom: 16px; color: #999;',
+        });
+        messageLabel.clutterText.line_wrap = true;
+        mainBox.add_child(messageLabel);
+
+        // Instructions
+        const instructionsLabel = new St.Label({
+            text: _('Check logs for details:'),
+            style: 'margin-bottom: 8px;',
+        });
+        mainBox.add_child(instructionsLabel);
+
+        // Log commands box
+        const logBox = new St.BoxLayout({
+            vertical: true,
+            style: 'background: rgba(0,0,0,0.2); padding: 12px; border-radius: 6px; margin-bottom: 16px;',
+        });
+
+        const journalCmd = new St.Label({
+            text: 'journalctl -f -o cat /usr/bin/gnome-shell',
+            style: 'font-family: monospace; font-size: 11px; margin-bottom: 4px;',
+        });
+        const historyPath = new St.Label({
+            text: LOG_PATH + 'history.jsonl',
+            style: 'font-family: monospace; font-size: 11px;',
+        });
+
+        logBox.add_child(journalCmd);
+        logBox.add_child(historyPath);
+        mainBox.add_child(logBox);
+
+        // Timestamp
+        if (this._lastError?.timestamp) {
+            const timeLabel = new St.Label({
+                text: `Error at: ${this._lastError.timestamp}`,
+                style: 'font-size: 10px; color: #666;',
+            });
+            mainBox.add_child(timeLabel);
+        }
+
+        // Restart hint
+        const restartLabel = new St.Label({
+            text: _('Try disabling and re-enabling the extension, or restart GNOME Shell.'),
+            style: 'margin-top: 12px; font-size: 11px; color: #888;',
+        });
+        restartLabel.clutterText.line_wrap = true;
+        mainBox.add_child(restartLabel);
+
+        (this.button.menu as PopupMenu.PopupMenu).box.add_child(mainBox);
     }
 
     _getPositionConfig() {
@@ -208,24 +348,35 @@ export default class TodoListExtension extends Extension {
         );
         this._groupDropdown.set_style("min-width: 80px;");
 
-        // Text entry
+        // Text entry - width set by _applyPopupWidth based on popup-width setting
         this.input = new St.Entry({
             name: "newTaskEntry",
             hint_text: _("Add new task..."),
             track_hover: true,
             can_focus: true,
             styleClass: "input",
-            style: "width: 320px; height: 35px;",
         });
 
         this.input.clutterText.connect("activate", (source) => {
             const taskText = source.get_text().trim();
+            // Exit edit mode before any changes
+            if (this._isEditing) {
+                this._exitEditMode();
+            }
             if (taskText) {
                 this._addTask(taskText);
                 source.set_text("");
                 source.grab_key_focus();
             }
         });
+
+        // Exit edit mode when input loses focus
+        this.input.clutterText.connect("key-focus-out", () => {
+            if (this._isEditing) {
+                this._exitEditMode();
+            }
+        });
+
         this.input.clutterText.set_max_length(MAX_INPUT_CHARS);
 
         inputContainer.add_child(this._groupDropdown);
@@ -234,10 +385,17 @@ export default class TodoListExtension extends Extension {
 
         this.mainBox.add_child(this.scrollView);
         this.mainBox.add_child(separator);
-        this.mainBox.set_style(`width: ${MAX_WINDOW_WIDTH}px; max-height: 500px;`);
+        this._applyPopupWidth();
         this.mainBox.add_child(bottomSection.actor);
 
         (this.button?.menu as PopupMenu.PopupMenu).box.add_child(this.mainBox);
+    }
+
+    _applyPopupWidth() {
+        const popupWidth = POPUP_WIDTHS[this._popupWidthMode] || POPUP_WIDTHS['normal'];
+        const inputWidth = INPUT_WIDTHS[this._popupWidthMode] || INPUT_WIDTHS['normal'];
+        this.mainBox?.set_style(`width: ${popupWidth}px; max-height: 500px;`);
+        this.input?.set_style(`width: ${inputWidth}px; height: 35px;`);
     }
 
     _createDropdown(label: string, onClick: () => void): St.Button {
@@ -332,6 +490,7 @@ export default class TodoListExtension extends Extension {
     _populate(updateButtonText = false) {
         // clear the todos box before populating it
         this.todosBox?.destroy_all_children();
+        this._taskItems = [];
         const todos = this._manager?.getParsed() || [];
         const filterGroup = this._manager?.getFilterGroup() || '';
         const groups = this._manager?.getGroups() || [];
@@ -446,8 +605,9 @@ export default class TodoListExtension extends Extension {
         item.style_class = `item ${isFocused ? "focused-task" : ""}`;
         // Create a horizontal box layout for custom alignment
         const box = new St.BoxLayout({
-            style_class: "todo-item-layout", // You can add a custom class here
+            style_class: "todo-item-layout",
             vertical: false,
+            x_expand: true,
         });
 
 
@@ -475,9 +635,12 @@ export default class TodoListExtension extends Extension {
 
         box.add_child(toggleCompletionBtn);
 
-        // Task label
+        // Extract URLs from task name
+        const { displayText, urls: taskUrls } = extractUrls(task.name);
+
+        // Task label (shows text without URLs)
         const label = new St.Label({
-            text: task.name,
+            text: displayText,
             y_align: Clutter.ActorAlign.CENTER,
             x_expand: true,
             style_class: "task-label",
@@ -487,7 +650,7 @@ export default class TodoListExtension extends Extension {
 
         if (task.isDone) {
             // cross line
-            label.clutterText.set_markup(`<s>${task.name}</s>`);
+            label.clutterText.set_markup(`<s>${displayText}</s>`);
             label.set_style("color: #999");
         }
 
@@ -509,6 +672,54 @@ export default class TodoListExtension extends Extension {
             Main.notify("Copied to clipboard", task.name);
             return Clutter.EVENT_STOP; // Stop propagation of the event
         });
+
+        // Create link buttons for each URL
+        const linkButtons: St.Button[] = [];
+        const showDomainLabel = taskUrls.length > 1;
+
+        for (const url of taskUrls) {
+            let buttonChild: St.Widget;
+            if (showDomainLabel) {
+                const btnBox = new St.BoxLayout({
+                    vertical: false,
+                    style: 'spacing: 4px;',
+                });
+                btnBox.add_child(new St.Icon({
+                    icon_name: "web-browser-symbolic",
+                    style_class: "btn-icon",
+                }));
+                btnBox.add_child(new St.Label({
+                    text: extractDomain(url),
+                    style: 'font-size: 10px;',
+                    y_align: Clutter.ActorAlign.CENTER,
+                }));
+                buttonChild = btnBox;
+            } else {
+                buttonChild = new St.Icon({
+                    icon_name: "web-browser-symbolic",
+                    style_class: "btn-icon",
+                });
+            }
+
+            const linkButton = new St.Button({
+                child: buttonChild,
+                style_class: "link-btn",
+                y_align: Clutter.ActorAlign.CENTER,
+                x_align: Clutter.ActorAlign.END,
+            });
+
+            linkButton.connect("clicked", () => {
+                try {
+                    Gio.AppInfo.launch_default_for_uri(url, null);
+                } catch (error) {
+                    const msg = error instanceof Error ? error.message : String(error);
+                    Main.notify("Failed to open URL", `${url}\n${msg}`);
+                }
+                return Clutter.EVENT_STOP;
+            });
+
+            linkButtons.push(linkButton);
+        }
 
         // Rename button
         const renameButton = new St.Button({
@@ -577,8 +788,12 @@ export default class TodoListExtension extends Extension {
             vertical: false,
             style_class: "action-buttons-container",
             style: "spacing: 5px;",
+            x_align: Clutter.ActorAlign.END,
         });
 
+        for (const linkBtn of linkButtons) {
+            actionButtonsContainer.add_child(linkBtn);
+        }
         actionButtonsContainer.add_child(copyButton);
         actionButtonsContainer.add_child(renameButton);
         actionButtonsContainer.add_child(focusButton);
@@ -589,6 +804,9 @@ export default class TodoListExtension extends Extension {
 
         // Add the box to the item
         item.add_child(box);
+
+        // Track item for edit mode
+        this._taskItems.push(item);
 
         // Finally, add the item to the todosBox
         this.todosBox?.add_child(item);
@@ -621,11 +839,30 @@ export default class TodoListExtension extends Extension {
         // Refresh the view to remove the task from display
         this._populate(true);
 
+        // Enter edit mode - disable hover on task items
+        this._enterEditMode();
+
         // Focus the input field for editing
         this.input?.clutterText.grab_key_focus();
 
         // Select all text for easy editing
         this.input?.clutterText.set_selection(0, -1);
+    }
+
+    _enterEditMode() {
+        this._isEditing = true;
+        // Disable reactivity on all task items to prevent hover interference
+        for (const item of this._taskItems) {
+            item.reactive = false;
+        }
+    }
+
+    _exitEditMode() {
+        this._isEditing = false;
+        // Re-enable reactivity on all task items
+        for (const item of this._taskItems) {
+            item.reactive = true;
+        }
     }
 
     _createConfirmationDialog(
@@ -741,10 +978,8 @@ export default class TodoListExtension extends Extension {
 
     _showDeleteConfirmation(taskName: string, itemIndex: number, onConfirm: () => void) {
         // Create a beautiful modal-like confirmation
-        const truncatedName = taskName.length > 40 ? taskName.substring(0, 40) + "..." : taskName;
-
         this._createConfirmationDialog(
-            `Delete "${truncatedName}"?`,
+            `Delete "${truncateText(taskName)}"?`,
             onConfirm,
             itemIndex + 1,
             false
@@ -752,8 +987,14 @@ export default class TodoListExtension extends Extension {
     }
 
     disable() {
-        // Remove keybinding
-        Main.wm.removeKeybinding("open-todozen");
+        // Remove keybinding (only if not in error mode)
+        if (!this._errorMode) {
+            try {
+                Main.wm.removeKeybinding("open-todozen");
+            } catch {
+                // Keybinding may not exist in error mode
+            }
+        }
 
         // Disconnect settings signals
         if (this._positionChangedId && this._settings) {
@@ -767,6 +1008,10 @@ export default class TodoListExtension extends Extension {
         if (this._todosChangedId && this._settings) {
             this._settings.disconnect(this._todosChangedId);
             this._todosChangedId = null;
+        }
+        if (this._popupWidthChangedId && this._settings) {
+            this._settings.disconnect(this._popupWidthChangedId);
+            this._popupWidthChangedId = null;
         }
 
         // Disconnect menu open-state-changed signal
@@ -811,6 +1056,8 @@ export default class TodoListExtension extends Extension {
         this._manager?.destroy();
         this._manager = null;
         this._settings = null;
+        this._errorMode = false;
+        this._lastError = null;
     }
 
 }

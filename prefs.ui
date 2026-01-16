@@ -49,6 +49,37 @@
             </child>
           </object>
         </child>
+        <child>
+          <object class="AdwActionRow">
+            <property name="title" translatable="yes">Popup width</property>
+            <property name="subtitle" translatable="yes">Width of the todo list popup</property>
+            <child>
+              <object class="GtkBox" id="width-box">
+                <property name="halign">center</property>
+                <property name="valign">center</property>
+                <property name="css-classes">linked</property>
+                <child>
+                  <object class="GtkToggleButton" id="width-normal">
+                    <property name="label">Normal</property>
+                    <property name="tooltip-text">500px</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="width-wide">
+                    <property name="label">Wide</property>
+                    <property name="tooltip-text">700px</property>
+                  </object>
+                </child>
+                <child>
+                  <object class="GtkToggleButton" id="width-ultra">
+                    <property name="label">Ultra</property>
+                    <property name="tooltip-text">900px</property>
+                  </object>
+                </child>
+              </object>
+            </child>
+          </object>
+        </child>
       </object>
     </child>
     <child>
