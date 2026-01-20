@@ -1,10 +1,10 @@
-import { Extension } from "@girs/gnome-shell/extensions/extension";
-import Gio from "gi://Gio";
 import { HistoryLogger } from "./history.js";
 import {
   Task,
   Group,
   HistoryAction,
+  SettingsLike,
+  HistoryLoggerLike,
   TASK_VERSION,
   migrateTask,
   migrateGroup,
@@ -19,23 +19,23 @@ import {
 } from "./utils.js";
 
 // Re-export types for convenience
-export type { Task, Group };
+export type { Task, Group, SettingsLike, HistoryLoggerLike };
 
 const TODOS = "todos";
 const GROUPS = "groups";
 const MAX_GROUPS = 10;
 
 export class TodoListManager {
-  GSettings: Gio.Settings;
-  private _history: HistoryLogger;
+  GSettings: SettingsLike;
+  private _history: HistoryLoggerLike;
   private _tasksCache: Task[] | null = null;
   private _groupsCache: Group[] | null = null;
   private _todosChangedId: number;
   private _groupsChangedId: number;
 
-  constructor(extension: Extension) {
-    this.GSettings = extension.getSettings();
-    this._history = new HistoryLogger();
+  constructor(settings: SettingsLike, history?: HistoryLoggerLike) {
+    this.GSettings = settings;
+    this._history = history || new HistoryLogger();
 
     // Invalidate caches when settings change (e.g., from prefs)
     this._todosChangedId = this.GSettings.connect('changed::todos', () => {

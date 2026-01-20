@@ -46,6 +46,21 @@ import {
     formatErrorForDisplay,
     formatErrorForLog,
     safeExecute,
+    // Extracted from extension.ts
+    PositionConfig,
+    getPositionConfig,
+    getFilterLabel,
+    getGroupLabel,
+    getNextFilterGroupId,
+    getNextGroupId,
+    filterTasksByGroup,
+    groupTasksByGroupId,
+    prepareTaskUpdate,
+    // Pinned task display
+    PinnedTaskDisplay,
+    getPinnedTaskDisplay,
+    // Color conversion
+    rgbaToHex,
 } from '../src/utils';
 
 describe('cleanUrlTrailingPunctuation', () => {
@@ -1275,5 +1290,538 @@ describe('safeExecute', () => {
         if (!result.ok) {
             expect(result.error).toContain('string error');
         }
+    });
+});
+
+// ===== Tests for functions extracted from extension.ts =====
+
+describe('getPositionConfig', () => {
+    it('should return left config', () => {
+        const config = getPositionConfig('left');
+        expect(config.box).toBe('left');
+        expect(config.index).toBe(0);
+    });
+
+    it('should return center-left config', () => {
+        const config = getPositionConfig('center-left');
+        expect(config.box).toBe('center');
+        expect(config.index).toBe(0);
+    });
+
+    it('should return center config', () => {
+        const config = getPositionConfig('center');
+        expect(config.box).toBe('center');
+        expect(config.index).toBe(1);
+    });
+
+    it('should return center-right config', () => {
+        const config = getPositionConfig('center-right');
+        expect(config.box).toBe('center');
+        expect(config.index).toBe(2);
+    });
+
+    it('should return right config', () => {
+        const config = getPositionConfig('right');
+        expect(config.box).toBe('right');
+        expect(config.index).toBe(0);
+    });
+
+    it('should default to right for unknown position', () => {
+        const config = getPositionConfig('unknown');
+        expect(config.box).toBe('right');
+        expect(config.index).toBe(0);
+    });
+
+    it('should default to right for empty string', () => {
+        const config = getPositionConfig('');
+        expect(config.box).toBe('right');
+        expect(config.index).toBe(0);
+    });
+});
+
+describe('getFilterLabel', () => {
+    const groups: Group[] = [
+        { version: 1, id: 'inbox', name: 'Inbox', color: '#3584e4' },
+        { version: 1, id: 'work', name: 'Work', color: '#ff0000' },
+        { version: 1, id: 'personal', name: 'Personal', color: '#00ff00' },
+    ];
+
+    it('should return All for empty filter', () => {
+        expect(getFilterLabel('', groups)).toBe('All');
+    });
+
+    it('should return All for null filter', () => {
+        expect(getFilterLabel(null, groups)).toBe('All');
+    });
+
+    it('should return All for undefined filter', () => {
+        expect(getFilterLabel(undefined, groups)).toBe('All');
+    });
+
+    it('should return group name for valid group ID', () => {
+        expect(getFilterLabel('work', groups)).toBe('Work');
+    });
+
+    it('should return All for unknown group ID', () => {
+        expect(getFilterLabel('unknown', groups)).toBe('All');
+    });
+
+    it('should work with empty groups array', () => {
+        expect(getFilterLabel('inbox', [])).toBe('All');
+    });
+});
+
+describe('getGroupLabel', () => {
+    const groups: Group[] = [
+        { version: 1, id: 'inbox', name: 'Inbox', color: '#3584e4' },
+        { version: 1, id: 'work', name: 'Work', color: '#ff0000' },
+    ];
+
+    it('should return group name for valid ID', () => {
+        expect(getGroupLabel('work', groups)).toBe('Work');
+    });
+
+    it('should return Inbox for inbox ID', () => {
+        expect(getGroupLabel('inbox', groups)).toBe('Inbox');
+    });
+
+    it('should return Inbox for unknown group ID', () => {
+        expect(getGroupLabel('unknown', groups)).toBe('Inbox');
+    });
+
+    it('should work with empty groups array', () => {
+        expect(getGroupLabel('inbox', [])).toBe('Inbox');
+    });
+});
+
+describe('getNextFilterGroupId', () => {
+    const groups: Group[] = [
+        { version: 1, id: 'inbox', name: 'Inbox', color: '#3584e4' },
+        { version: 1, id: 'work', name: 'Work', color: '#ff0000' },
+        { version: 1, id: 'personal', name: 'Personal', color: '#00ff00' },
+    ];
+
+    it('should return first group when currently All (empty)', () => {
+        expect(getNextFilterGroupId('', groups)).toBe('inbox');
+    });
+
+    it('should return first group when currently All (null)', () => {
+        expect(getNextFilterGroupId(null, groups)).toBe('inbox');
+    });
+
+    it('should return first group when currently All (undefined)', () => {
+        expect(getNextFilterGroupId(undefined, groups)).toBe('inbox');
+    });
+
+    it('should return next group when not at end', () => {
+        expect(getNextFilterGroupId('inbox', groups)).toBe('work');
+        expect(getNextFilterGroupId('work', groups)).toBe('personal');
+    });
+
+    it('should return All (empty string) when at last group', () => {
+        expect(getNextFilterGroupId('personal', groups)).toBe('');
+    });
+
+    it('should return All for unknown group ID', () => {
+        expect(getNextFilterGroupId('unknown', groups)).toBe('');
+    });
+
+    it('should return All when no groups', () => {
+        expect(getNextFilterGroupId('', [])).toBe('');
+    });
+});
+
+describe('getNextGroupId', () => {
+    const groups: Group[] = [
+        { version: 1, id: 'inbox', name: 'Inbox', color: '#3584e4' },
+        { version: 1, id: 'work', name: 'Work', color: '#ff0000' },
+        { version: 1, id: 'personal', name: 'Personal', color: '#00ff00' },
+    ];
+
+    it('should return next group', () => {
+        expect(getNextGroupId('inbox', groups)).toBe('work');
+        expect(getNextGroupId('work', groups)).toBe('personal');
+    });
+
+    it('should wrap to first group when at end', () => {
+        expect(getNextGroupId('personal', groups)).toBe('inbox');
+    });
+
+    it('should return first group for unknown ID', () => {
+        expect(getNextGroupId('unknown', groups)).toBe('inbox');
+    });
+
+    it('should return current ID when no groups', () => {
+        expect(getNextGroupId('inbox', [])).toBe('inbox');
+    });
+});
+
+describe('filterTasksByGroup', () => {
+    const tasks: Task[] = [
+        { version: 1, id: '1', name: 'Task 1', isDone: false, groupId: 'inbox' },
+        { version: 1, id: '2', name: 'Task 2', isDone: false, groupId: 'work' },
+        { version: 1, id: '3', name: 'Task 3', isDone: true, groupId: 'inbox' },
+        { version: 1, id: '4', name: 'Task 4', isDone: false, groupId: 'work' },
+    ];
+
+    it('should return all tasks when filter is empty', () => {
+        expect(filterTasksByGroup(tasks, '')).toEqual(tasks);
+    });
+
+    it('should return all tasks when filter is null', () => {
+        expect(filterTasksByGroup(tasks, null)).toEqual(tasks);
+    });
+
+    it('should return all tasks when filter is undefined', () => {
+        expect(filterTasksByGroup(tasks, undefined)).toEqual(tasks);
+    });
+
+    it('should filter by group ID', () => {
+        const filtered = filterTasksByGroup(tasks, 'inbox');
+        expect(filtered.length).toBe(2);
+        expect(filtered.every(t => t.groupId === 'inbox')).toBe(true);
+    });
+
+    it('should return empty array for unknown group', () => {
+        expect(filterTasksByGroup(tasks, 'unknown')).toEqual([]);
+    });
+
+    it('should handle empty tasks array', () => {
+        expect(filterTasksByGroup([], 'inbox')).toEqual([]);
+    });
+});
+
+describe('groupTasksByGroupId', () => {
+    it('should group tasks by groupId', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Task 1', isDone: false, groupId: 'inbox' },
+            { version: 1, id: '2', name: 'Task 2', isDone: false, groupId: 'work' },
+            { version: 1, id: '3', name: 'Task 3', isDone: true, groupId: 'inbox' },
+        ];
+
+        const grouped = groupTasksByGroupId(tasks);
+        expect(grouped.get('inbox')?.length).toBe(2);
+        expect(grouped.get('work')?.length).toBe(1);
+    });
+
+    it('should preserve original indices', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Task 1', isDone: false, groupId: 'inbox' },
+            { version: 1, id: '2', name: 'Task 2', isDone: false, groupId: 'work' },
+            { version: 1, id: '3', name: 'Task 3', isDone: true, groupId: 'inbox' },
+        ];
+
+        const grouped = groupTasksByGroupId(tasks);
+        const inboxTasks = grouped.get('inbox')!;
+        expect(inboxTasks[0].index).toBe(0);
+        expect(inboxTasks[1].index).toBe(2);
+    });
+
+    it('should use inbox for tasks without groupId', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Task 1', isDone: false }, // no groupId
+            { version: 1, id: '2', name: 'Task 2', isDone: false, groupId: 'work' },
+        ];
+
+        const grouped = groupTasksByGroupId(tasks);
+        expect(grouped.get('inbox')?.length).toBe(1);
+        expect(grouped.get('work')?.length).toBe(1);
+    });
+
+    it('should handle empty tasks array', () => {
+        const grouped = groupTasksByGroupId([]);
+        expect(grouped.size).toBe(0);
+    });
+
+    it('should handle tasks all in same group', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Task 1', isDone: false, groupId: 'work' },
+            { version: 1, id: '2', name: 'Task 2', isDone: false, groupId: 'work' },
+        ];
+
+        const grouped = groupTasksByGroupId(tasks);
+        expect(grouped.size).toBe(1);
+        expect(grouped.get('work')?.length).toBe(2);
+    });
+});
+
+describe('prepareTaskUpdate', () => {
+    const tasks: Task[] = [
+        { version: 1, id: 'task_1', name: 'Task 1', isDone: false, groupId: 'inbox' },
+        { version: 1, id: 'task_2', name: 'Task 2', isDone: true, groupId: 'work' },
+        { version: 1, id: 'task_3', name: 'Task 3', isDone: false, groupId: 'inbox' },
+    ];
+
+    it('should find task and apply updates', () => {
+        const result = prepareTaskUpdate(tasks, 'task_2', { isDone: false });
+        expect(result).not.toBeNull();
+        expect(result!.index).toBe(1);
+        expect(result!.updatedTask.isDone).toBe(false);
+        expect(result!.updatedTask.name).toBe('Task 2');
+        expect(result!.updatedTask.id).toBe('task_2');
+    });
+
+    it('should update name', () => {
+        const result = prepareTaskUpdate(tasks, 'task_1', { name: 'Updated Name' });
+        expect(result!.updatedTask.name).toBe('Updated Name');
+    });
+
+    it('should update groupId', () => {
+        const result = prepareTaskUpdate(tasks, 'task_1', { groupId: 'work' });
+        expect(result!.updatedTask.groupId).toBe('work');
+    });
+
+    it('should update isFocused', () => {
+        const result = prepareTaskUpdate(tasks, 'task_1', { isFocused: true });
+        expect(result!.updatedTask.isFocused).toBe(true);
+    });
+
+    it('should apply multiple updates', () => {
+        const result = prepareTaskUpdate(tasks, 'task_1', {
+            name: 'New Name',
+            isDone: true,
+            groupId: 'personal',
+        });
+        expect(result!.updatedTask.name).toBe('New Name');
+        expect(result!.updatedTask.isDone).toBe(true);
+        expect(result!.updatedTask.groupId).toBe('personal');
+    });
+
+    it('should return null for non-existent task ID', () => {
+        const result = prepareTaskUpdate(tasks, 'non_existent', { isDone: true });
+        expect(result).toBeNull();
+    });
+
+    it('should preserve id and version', () => {
+        const result = prepareTaskUpdate(tasks, 'task_1', { name: 'Updated' });
+        expect(result!.updatedTask.id).toBe('task_1');
+        expect(result!.updatedTask.version).toBe(1);
+    });
+
+    it('should handle empty tasks array', () => {
+        const result = prepareTaskUpdate([], 'task_1', { isDone: true });
+        expect(result).toBeNull();
+    });
+
+    it('should not mutate original task', () => {
+        const originalName = tasks[0].name;
+        prepareTaskUpdate(tasks, 'task_1', { name: 'Updated' });
+        expect(tasks[0].name).toBe(originalName);
+    });
+});
+
+// ===== Pinned Task Display Tests =====
+
+describe('getPinnedTaskDisplay', () => {
+    it('should return null when feature is disabled', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Pinned task', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, false);
+        expect(result.labelText).toBeNull();
+        expect(result.url).toBeNull();
+    });
+
+    it('should return null when no tasks', () => {
+        const result = getPinnedTaskDisplay([], true);
+        expect(result.labelText).toBeNull();
+        expect(result.url).toBeNull();
+    });
+
+    it('should return null when no pinned task', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Task 1', isDone: false, isFocused: false },
+            { version: 1, id: '2', name: 'Task 2', isDone: false },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBeNull();
+        expect(result.url).toBeNull();
+    });
+
+    it('should return null when pinned task is done', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Done pinned', isDone: true, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBeNull();
+        expect(result.url).toBeNull();
+    });
+
+    it('should return text for simple pinned task', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Buy milk', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('Buy milk');
+        expect(result.url).toBeNull();
+    });
+
+    it('should return text and URL for task with link', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Check https://example.com docs', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('Check docs');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should return pin indicator for URL-only task', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'https://example.com', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('📌');
+        expect(result.url).toBe('https://example.com');
+    });
+
+    it('should return pin indicator for whitespace-only task', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: '   ', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('📌');
+        expect(result.url).toBeNull();
+    });
+
+    it('should find first pinned task (not just first task)', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Not pinned', isDone: false, isFocused: false },
+            { version: 1, id: '2', name: 'Also not pinned', isDone: false },
+            { version: 1, id: '3', name: 'The pinned one', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('The pinned one');
+    });
+
+    it('should limit text to 4 words', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'One two three four five six', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('One two three four');
+    });
+
+    it('should truncate long text to 30 chars', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Supercalifragilisticexpialidocious', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText!.length).toBeLessThanOrEqual(30);
+    });
+
+    it('should skip done tasks even if focused', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Done and focused', isDone: true, isFocused: true },
+            { version: 1, id: '2', name: 'Undone and focused', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('Undone and focused');
+    });
+
+    it('should handle task with multiple URLs', () => {
+        const tasks: Task[] = [
+            { version: 1, id: '1', name: 'Check https://a.com and https://b.com', isDone: false, isFocused: true },
+        ];
+        const result = getPinnedTaskDisplay(tasks, true);
+        expect(result.labelText).toBe('Check and');
+        expect(result.url).toBe('https://a.com'); // First URL
+    });
+});
+
+// ===== Color Conversion Tests =====
+
+describe('rgbaToHex', () => {
+    it('should convert rgba to hex', () => {
+        expect(rgbaToHex('rgba(255, 0, 0, 1)')).toBe('#ff0000');
+        expect(rgbaToHex('rgba(0, 255, 0, 1)')).toBe('#00ff00');
+        expect(rgbaToHex('rgba(0, 0, 255, 1)')).toBe('#0000ff');
+    });
+
+    it('should convert rgb to hex', () => {
+        expect(rgbaToHex('rgb(255, 0, 0)')).toBe('#ff0000');
+        expect(rgbaToHex('rgb(0, 255, 0)')).toBe('#00ff00');
+    });
+
+    it('should handle rgba without spaces', () => {
+        expect(rgbaToHex('rgba(255,128,64,0.5)')).toBe('#ff8040');
+    });
+
+    it('should handle rgb without spaces', () => {
+        expect(rgbaToHex('rgb(128,128,128)')).toBe('#808080');
+    });
+
+    it('should pad single digit hex values', () => {
+        expect(rgbaToHex('rgb(0, 0, 0)')).toBe('#000000');
+        expect(rgbaToHex('rgb(15, 15, 15)')).toBe('#0f0f0f');
+    });
+
+    it('should return default blue for invalid input', () => {
+        expect(rgbaToHex('not a color')).toBe('#3584e4');
+        expect(rgbaToHex('')).toBe('#3584e4');
+        expect(rgbaToHex('#ff0000')).toBe('#3584e4'); // Already hex
+    });
+
+    it('should handle white and black', () => {
+        expect(rgbaToHex('rgb(255, 255, 255)')).toBe('#ffffff');
+        expect(rgbaToHex('rgb(0, 0, 0)')).toBe('#000000');
+    });
+
+    it('should not throw on edge case inputs', () => {
+        // These would throw if not handled properly
+        expect(() => rgbaToHex(null as unknown as string)).not.toThrow();
+        expect(() => rgbaToHex(undefined as unknown as string)).not.toThrow();
+        expect(() => rgbaToHex(123 as unknown as string)).not.toThrow();
+    });
+});
+
+// ===== Defensive Edge Case Tests =====
+
+describe('Extracted functions - edge case robustness', () => {
+    it('getPositionConfig should not throw on invalid input', () => {
+        expect(() => getPositionConfig(null as unknown as string)).not.toThrow();
+        expect(() => getPositionConfig(undefined as unknown as string)).not.toThrow();
+        expect(() => getPositionConfig('')).not.toThrow();
+    });
+
+    it('getFilterLabel should not throw on null/undefined', () => {
+        expect(() => getFilterLabel(null, [])).not.toThrow();
+        expect(() => getFilterLabel(undefined, [])).not.toThrow();
+        expect(() => getFilterLabel('id', [])).not.toThrow();
+    });
+
+    it('getGroupLabel should not throw on edge cases', () => {
+        expect(() => getGroupLabel('', [])).not.toThrow();
+        expect(() => getGroupLabel(null as unknown as string, [])).not.toThrow();
+    });
+
+    it('getNextFilterGroupId should not throw on edge cases', () => {
+        expect(() => getNextFilterGroupId(null, [])).not.toThrow();
+        expect(() => getNextFilterGroupId(undefined, [])).not.toThrow();
+        expect(() => getNextFilterGroupId('', [])).not.toThrow();
+    });
+
+    it('getNextGroupId should not throw on edge cases', () => {
+        expect(() => getNextGroupId('', [])).not.toThrow();
+        expect(() => getNextGroupId('unknown', [])).not.toThrow();
+    });
+
+    it('filterTasksByGroup should not throw on edge cases', () => {
+        expect(() => filterTasksByGroup([], null)).not.toThrow();
+        expect(() => filterTasksByGroup([], undefined)).not.toThrow();
+        expect(() => filterTasksByGroup([], '')).not.toThrow();
+    });
+
+    it('groupTasksByGroupId should not throw on empty array', () => {
+        expect(() => groupTasksByGroupId([])).not.toThrow();
+    });
+
+    it('prepareTaskUpdate should not throw on edge cases', () => {
+        expect(() => prepareTaskUpdate([], 'id', {})).not.toThrow();
+        expect(() => prepareTaskUpdate([], '', { name: 'test' })).not.toThrow();
+    });
+
+    it('getPinnedTaskDisplay should not throw on edge cases', () => {
+        expect(() => getPinnedTaskDisplay([], true)).not.toThrow();
+        expect(() => getPinnedTaskDisplay([], false)).not.toThrow();
     });
 });

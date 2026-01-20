@@ -5,5 +5,5 @@
   "shell-version": ["42", "43", "44", "45", "46", "47", "48", "49"],
   "url": "https://github.com/Irtesaam/todozen",
   "settings-schema": "org.gnome.shell.extensions.todozen",
-  "version": 35
+  "version": 36
 }

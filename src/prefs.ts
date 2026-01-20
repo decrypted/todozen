@@ -5,6 +5,7 @@ import Adw from 'gi://Adw';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 import { HistoryLogger } from './history.js';
+import { rgbaToHex } from './utils.js';
 
 interface Task {
     version: number;
@@ -227,18 +228,6 @@ export default class TodoZenPreferences extends ExtensionPreferences {
 
             // Update add button sensitivity
             addGroupBtn.set_sensitive(groups.length < MAX_GROUPS);
-        };
-
-        const rgbaToHex = (rgba: string): string => {
-            // Handle both "rgba(r,g,b,a)" and "rgb(r,g,b)" formats
-            const match = rgba.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
-            if (match) {
-                const r = parseInt(match[1]).toString(16).padStart(2, '0');
-                const g = parseInt(match[2]).toString(16).padStart(2, '0');
-                const b = parseInt(match[3]).toString(16).padStart(2, '0');
-                return `#${r}${g}${b}`;
-            }
-            return '#3584e4';
         };
 
         const showEditDialog = (group: Group, index: number, groups: Group[]) => {

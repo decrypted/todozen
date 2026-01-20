@@ -1,5 +1,26 @@
 # Changelog
 
+## 3.5.0
+
+### Fixed
+- **Pinned task not showing on startup**: Panel now shows pinned task when extension loads (deferred via GLib.idle_add)
+- **GNOME freeze on login**: Fixed by deferring pinned task init until shell widgets are realized
+- **Edit mode not updating group**: Changing group dropdown in edit mode now actually changes the task's group
+- **Edit mode wrong dropdown**: Dropdown now shows task's current group when entering edit mode
+- **rgbaToHex crash**: Color conversion no longer crashes on null/undefined input
+
+### Changed
+- **Testing architecture refactor**: Extracted 10 pure functions from extension.ts/prefs.ts to utils.ts
+- **Dependency injection**: manager.ts now accepts `SettingsLike` interface for testability
+- **Test mirror pattern**: Manager tests use mirrored class with same pure functions
+- **Edge case robustness**: All extracted functions handle invalid input gracefully
+
+### Developer Experience
+- 285 unit tests (up from 204)
+- 97.47% coverage on utils.ts
+- Documented testing architecture in CLAUDE.md
+- Added defensive edge case tests for all extracted functions
+
 ## 3.4.0
 
 ### Added

@@ -1,3 +1,23 @@
+// ===== Interfaces for dependency injection (allows mocking in tests) =====
+
+/**
+ * Interface for GSettings-like storage.
+ * Implemented by Gio.Settings in GNOME, MockSettings in tests.
+ */
+export interface SettingsLike {
+  get_strv(key: string): string[];
+  set_strv(key: string, value: string[]): void;
+  get_string(key: string): string;
+  set_string(key: string, value: string): void;
+  get_boolean(key: string): boolean;
+  connect(signal: string, callback: () => void): number;
+  disconnect(id: number): void;
+}
+
+// HistoryLoggerLike is defined after HistoryAction type (see below)
+
+// ===== URL utilities =====
+
 /**
  * Clean trailing punctuation from URL that's likely not part of the URL.
  * @param url - Raw extracted URL
@@ -390,6 +410,215 @@ export function moveTasksToGroup(todos: string[], fromGroupId: string, toGroupId
     });
 }
 
+// ===== Panel Position =====
+
+export interface PositionConfig {
+    box: 'left' | 'center' | 'right';
+    index: number;
+}
+
+const POSITION_CONFIG: Record<string, PositionConfig> = {
+    'left':         { box: 'left',   index: 0 },
+    'center-left':  { box: 'center', index: 0 },
+    'center':       { box: 'center', index: 1 },
+    'center-right': { box: 'center', index: 2 },
+    'right':        { box: 'right',  index: 0 },
+};
+
+/**
+ * Get panel position configuration for a position setting.
+ * @param position - Position setting string
+ * @returns Panel box name and index
+ */
+export function getPositionConfig(position: string): PositionConfig {
+    return POSITION_CONFIG[position] || POSITION_CONFIG['right'];
+}
+
+// ===== Filter and Group Labels =====
+
+/**
+ * Get display label for filter dropdown.
+ * @param filterGroupId - Current filter group ID (empty string = "All")
+ * @param groups - Array of all groups
+ * @returns Display label for the filter
+ */
+export function getFilterLabel(filterGroupId: string | null | undefined, groups: Group[]): string {
+    if (!filterGroupId) return 'All';
+    const group = groups.find(g => g.id === filterGroupId);
+    return group?.name || 'All';
+}
+
+/**
+ * Get display label for a group.
+ * @param groupId - Group ID to look up
+ * @param groups - Array of all groups
+ * @returns Group name or "Inbox" if not found
+ */
+export function getGroupLabel(groupId: string, groups: Group[]): string {
+    const group = groups.find(g => g.id === groupId);
+    return group?.name || 'Inbox';
+}
+
+// ===== Cycling Logic =====
+
+/**
+ * Get next filter group ID when cycling through filters.
+ * Cycles: All → group1 → group2 → ... → All
+ * @param currentFilterId - Current filter group ID (empty/null = "All")
+ * @param groups - Array of all groups
+ * @returns Next filter group ID (empty string = "All")
+ */
+export function getNextFilterGroupId(currentFilterId: string | null | undefined, groups: Group[]): string {
+    if (!currentFilterId) {
+        // Currently "All", go to first group if available
+        return groups.length > 0 ? groups[0].id : '';
+    }
+
+    // Find current group index and go to next (or wrap to All)
+    const currentIndex = groups.findIndex(g => g.id === currentFilterId);
+    if (currentIndex === -1 || currentIndex === groups.length - 1) {
+        // Not found or last group, go to All
+        return '';
+    }
+
+    // Go to next group
+    return groups[currentIndex + 1].id;
+}
+
+/**
+ * Get next group ID when cycling through groups for task assignment.
+ * Cycles: group1 → group2 → ... → group1
+ * @param currentGroupId - Current selected group ID
+ * @param groups - Array of all groups
+ * @returns Next group ID
+ */
+export function getNextGroupId(currentGroupId: string, groups: Group[]): string {
+    if (groups.length === 0) return currentGroupId;
+
+    const currentIndex = groups.findIndex(g => g.id === currentGroupId);
+    if (currentIndex === -1) {
+        // Not found, return first group
+        return groups[0].id;
+    }
+
+    const nextIndex = (currentIndex + 1) % groups.length;
+    return groups[nextIndex].id;
+}
+
+// ===== Task Filtering and Grouping =====
+
+/**
+ * Filter tasks by group ID.
+ * @param tasks - Array of tasks
+ * @param filterGroupId - Group ID to filter by (empty/null = return all)
+ * @returns Filtered tasks
+ */
+export function filterTasksByGroup(tasks: Task[], filterGroupId: string | null | undefined): Task[] {
+    if (!filterGroupId) return tasks;
+    return tasks.filter(t => t.groupId === filterGroupId);
+}
+
+/**
+ * Group tasks by their groupId, preserving original indices.
+ * @param tasks - Array of tasks
+ * @returns Map of groupId → array of { task, index }
+ */
+export function groupTasksByGroupId(tasks: Task[]): Map<string, { task: Task; index: number }[]> {
+    const tasksByGroup = new Map<string, { task: Task; index: number }[]>();
+
+    tasks.forEach((task, index) => {
+        const groupId = task.groupId || 'inbox';
+        if (!tasksByGroup.has(groupId)) {
+            tasksByGroup.set(groupId, []);
+        }
+        tasksByGroup.get(groupId)!.push({ task, index });
+    });
+
+    return tasksByGroup;
+}
+
+/**
+ * Find task by ID and prepare update object.
+ * @param tasks - Array of tasks
+ * @param taskId - ID of task to find
+ * @param updates - Partial task updates to apply
+ * @returns Object with index and updated task, or null if not found
+ */
+export function prepareTaskUpdate(
+    tasks: Task[],
+    taskId: string,
+    updates: Partial<Omit<Task, 'id' | 'version'>>
+): { index: number; updatedTask: Task } | null {
+    const index = tasks.findIndex(t => t.id === taskId);
+    if (index === -1) return null;
+
+    const task = tasks[index];
+    return {
+        index,
+        updatedTask: { ...task, ...updates },
+    };
+}
+
+// ===== Pinned Task Display =====
+
+export interface PinnedTaskDisplay {
+    /** Text to show in panel label (null = hide label) */
+    labelText: string | null;
+    /** URL for link button (null = hide button) */
+    url: string | null;
+}
+
+/**
+ * Get display info for pinned task in panel.
+ * @param tasks - Array of tasks
+ * @param showPinnedInPanel - Whether the feature is enabled
+ * @returns Display info for pinned task
+ */
+export function getPinnedTaskDisplay(tasks: Task[], showPinnedInPanel: boolean): PinnedTaskDisplay {
+    if (!showPinnedInPanel) {
+        return { labelText: null, url: null };
+    }
+
+    const pinnedTask = tasks.find(t => t.isFocused && !t.isDone);
+    if (!pinnedTask) {
+        return { labelText: null, url: null };
+    }
+
+    const { text: pinnedText, url } = formatPinnedTaskForPanel(pinnedTask.name);
+
+    if (pinnedText) {
+        // Has text to display
+        return { labelText: pinnedText, url };
+    } else if (url) {
+        // URL-only task: show pin indicator
+        return { labelText: '📌', url };
+    } else {
+        // Empty/whitespace task: show pin indicator
+        return { labelText: '📌', url: null };
+    }
+}
+
+// ===== Color Conversion =====
+
+/**
+ * Convert rgba/rgb string to hex color.
+ * @param rgba - Color string like "rgba(255,0,0,1)" or "rgb(255,0,0)"
+ * @returns Hex color like "#ff0000", or default blue if parsing fails
+ */
+export function rgbaToHex(rgba: string): string {
+    if (!rgba || typeof rgba !== 'string') {
+        return '#3584e4'; // Default blue for invalid input
+    }
+    const match = rgba.match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/);
+    if (match) {
+        const r = parseInt(match[1]).toString(16).padStart(2, '0');
+        const g = parseInt(match[2]).toString(16).padStart(2, '0');
+        const b = parseInt(match[3]).toString(16).padStart(2, '0');
+        return `#${r}${g}${b}`;
+    }
+    return '#3584e4'; // Default blue
+}
+
 // ===== History =====
 
 export type HistoryAction =
@@ -406,6 +635,14 @@ export type HistoryAction =
     | 'group_created'
     | 'group_renamed'
     | 'group_deleted';
+
+/**
+ * Interface for history logger.
+ * Implemented by HistoryLogger in GNOME, MockHistoryLogger in tests.
+ */
+export interface HistoryLoggerLike {
+  log(action: HistoryAction, data?: Record<string, unknown>): void;
+}
 
 export interface HistoryEntry {
     timestamp: string;

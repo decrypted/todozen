@@ -1,136 +1,205 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  Task,
+  Group,
+  SettingsLike,
+  HistoryLoggerLike,
+  HistoryAction,
+  generateId,
+  countUndoneTasks,
+  insertTaskAtCorrectPosition,
+  moveTaskToTop,
+  moveTaskToEndOfGroup,
+  moveTasksToGroup,
+  canAddGroup,
+  canDeleteGroup,
+  migrateTask,
+  migrateGroup,
+  TASK_VERSION,
+  GROUP_VERSION,
+} from '../src/utils';
 
-// Mock GSettings-like storage
-class MockSettings {
-  private store: Map<string, any> = new Map();
+// Mock settings - implements SettingsLike interface
+class MockSettings implements SettingsLike {
+  private store: Map<string, unknown> = new Map();
+  private listeners: Map<string, Array<() => void>> = new Map();
+  private nextId = 1;
 
   get_strv(key: string): string[] {
-    return this.store.get(key) || [];
+    return (this.store.get(key) as string[]) || [];
   }
 
   set_strv(key: string, value: string[]) {
     this.store.set(key, value);
+    this._notify(`changed::${key}`);
   }
 
   get_string(key: string): string {
-    return this.store.get(key) || '';
+    return (this.store.get(key) as string) || '';
   }
 
   set_string(key: string, value: string) {
     this.store.set(key, value);
+    this._notify(`changed::${key}`);
   }
 
   get_boolean(key: string): boolean {
-    return this.store.get(key) ?? true;
+    const val = this.store.get(key);
+    return val === undefined ? true : (val as boolean);
   }
 
-  set_boolean(key: string, value: boolean) {
-    this.store.set(key, value);
+  connect(signal: string, callback: () => void): number {
+    if (!this.listeners.has(signal)) {
+      this.listeners.set(signal, []);
+    }
+    this.listeners.get(signal)!.push(callback);
+    return this.nextId++;
+  }
+
+  disconnect(_id: number): void {
+    // Simple implementation - we don't track by ID in tests
+  }
+
+  private _notify(signal: string) {
+    const callbacks = this.listeners.get(signal) || [];
+    callbacks.forEach(cb => cb());
   }
 }
 
-// Data types matching manager.ts
-interface Task {
-  version: number;
-  id: string;
-  name: string;
-  isDone: boolean;
-  isFocused?: boolean;
-  groupId?: string;
+// Mock history logger - implements HistoryLoggerLike interface
+class MockHistoryLogger implements HistoryLoggerLike {
+  private logs: Array<{ action: HistoryAction; data: Record<string, unknown> }> = [];
+
+  log(action: HistoryAction, data: Record<string, unknown> = {}) {
+    this.logs.push({ action, data });
+  }
+
+  getLogs() {
+    return this.logs;
+  }
+
+  clear() {
+    this.logs = [];
+  }
 }
 
-interface Group {
-  version: number;
-  id: string;
-  name: string;
-  color: string;
-}
+const TODOS = 'todos';
+const GROUPS = 'groups';
+const MAX_GROUPS = 10;
 
-// Simplified manager for testing (mirrors actual logic)
-class TestableManager {
-  private settings: MockSettings;
-  private historyLog: any[] = [];
+/**
+ * TodoListManager for tests.
+ *
+ * WHY THIS EXISTS:
+ * The real manager.ts imports from "gi://Gio" (GNOME) which can't run in Node.js/vitest.
+ * This test version uses the same pure functions from utils.ts but provides
+ * its own orchestration layer.
+ *
+ * WHAT'S SHARED (no duplication):
+ * - All business logic: moveTaskToTop, insertTaskAtCorrectPosition, countUndoneTasks, etc.
+ * - Data types: Task, Group, SettingsLike, HistoryLoggerLike interfaces
+ * - Constants: TASK_VERSION, GROUP_VERSION
+ *
+ * WHAT'S DUPLICATED (must stay in sync with manager.ts):
+ * - Constructor initialization (inbox creation, cache setup, signal connections)
+ * - Method signatures and orchestration flow (get → transform → set → log)
+ * - History logging decision logic (_logIfEnabled checks)
+ *
+ * IF MANAGER.TS CHANGES: Update this class to match the new orchestration.
+ *
+ * ALTERNATIVE APPROACHES (not implemented):
+ * 1. Mock gi:// imports in vitest - complex, fragile
+ * 2. Only test utils.ts pure functions - loses orchestration coverage
+ * 3. Integration tests with real GNOME runtime - requires full GNOME environment
+ */
+class TodoListManager {
+  GSettings: SettingsLike;
+  private _history: HistoryLoggerLike;
+  private _tasksCache: Task[] | null = null;
+  private _groupsCache: Group[] | null = null;
 
-  constructor(settings: MockSettings) {
-    this.settings = settings;
-    // Initialize default inbox group
-    if (this.getGroups().length === 0) {
-      this.settings.set_strv('groups', [JSON.stringify({
-        version: 1, id: 'inbox', name: 'Inbox', color: '#3584e4'
-      })]);
+  constructor(settings: SettingsLike, history: HistoryLoggerLike) {
+    this.GSettings = settings;
+    this._history = history;
+
+    // Invalidate caches on settings change (set up BEFORE checking groups)
+    this.GSettings.connect('changed::todos', () => { this._tasksCache = null; });
+    this.GSettings.connect('changed::groups', () => { this._groupsCache = null; });
+
+    // Initialize default inbox group if none exists
+    const rawGroups = this.GSettings.get_strv(GROUPS);
+    if (rawGroups.length === 0) {
+      const inbox: Group = {
+        version: GROUP_VERSION,
+        id: 'inbox',
+        name: 'Inbox',
+        color: '#3584e4',
+      };
+      this.GSettings.set_strv(GROUPS, [JSON.stringify(inbox)]);
     }
   }
 
-  private _generateId(): string {
-    return `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  private _logIfEnabled(action: HistoryAction, data: Record<string, unknown> = {}) {
+    if (this.GSettings.get_boolean('enable-history')) {
+      this._history.log(action, data);
+    }
   }
 
-  // Task methods
+  // ===== Task Methods =====
+
   get(): string[] {
-    return this.settings.get_strv('todos');
+    return this.GSettings.get_strv(TODOS);
   }
 
   getParsed(): Task[] {
-    return this.get().map(t => {
+    if (this._tasksCache) return this._tasksCache;
+
+    const raw = this.get();
+    let needsSave = false;
+    const tasks = raw.map(t => {
       const parsed = JSON.parse(t);
-      // Migration: add version if missing
       if (!parsed.version) {
-        return {
-          version: 1,
-          id: this._generateId(),
-          name: parsed.name,
-          isDone: parsed.isDone,
-          isFocused: parsed.isFocused,
-          groupId: 'inbox',
-        };
+        needsSave = true;
+        return migrateTask(parsed);
       }
       return parsed as Task;
     });
+
+    if (needsSave) {
+      this.GSettings.set_strv(TODOS, tasks.map(t => JSON.stringify(t)));
+    }
+    this._tasksCache = tasks;
+    return tasks;
   }
 
   getTotalUndone(groupId?: string): number {
-    const todos = this.getParsed();
-    return todos.filter(t => {
-      const matchesGroup = !groupId || t.groupId === groupId;
-      return !t.isDone && matchesGroup;
-    }).length;
+    return countUndoneTasks(this.getParsed(), groupId);
   }
 
   add(taskName: string, groupId?: string): Task {
     const todos = this.get();
     const newTask: Task = {
-      version: 1,
-      id: this._generateId(),
+      version: TASK_VERSION,
+      id: generateId(),
       name: taskName,
       isDone: false,
-      groupId
+      groupId: groupId || 'inbox',
     };
-    const newTaskStr = JSON.stringify(newTask);
 
-    if (todos.length > 0) {
-      const firstTask: Task = JSON.parse(todos[0]);
-      if (firstTask.isFocused) {
-        todos.splice(1, 0, newTaskStr);
-      } else {
-        todos.unshift(newTaskStr);
-      }
-    } else {
-      todos.push(newTaskStr);
-    }
-
-    this.settings.set_strv('todos', todos);
-    this._log('added', { taskId: newTask.id, task: taskName });
+    const updatedTodos = insertTaskAtCorrectPosition(todos, JSON.stringify(newTask));
+    this.GSettings.set_strv(TODOS, updatedTodos);
+    this._logIfEnabled('added', { taskId: newTask.id, task: taskName });
     return newTask;
   }
 
   remove(index: number) {
     const todos = this.get();
-    if (!todos.length) return;
+    if (!todos.length || index < 0 || index >= todos.length) return;
 
     const removed: Task = JSON.parse(todos[index]);
     todos.splice(index, 1);
-    this.settings.set_strv('todos', todos);
-    this._log('removed', { taskId: removed.id, task: removed.name });
+    this.GSettings.set_strv(TODOS, todos);
+    this._logIfEnabled('removed', { taskId: removed.id, task: removed.name });
   }
 
   update(index: number, todo: Task) {
@@ -138,40 +207,51 @@ class TestableManager {
     if (!todos.length) return;
 
     const oldTask: Task = JSON.parse(todos[index]);
+    const { todos: updatedTodos, unfocusedTasks } = moveTaskToTop(todos, index, todo);
+    this.GSettings.set_strv(TODOS, updatedTodos);
 
-    if (todo.isFocused && index > 0) {
-      const tmp = todos[0];
-      todos[0] = JSON.stringify(todo);
-      todos[index] = tmp;
-    } else {
-      todos[index] = JSON.stringify(todo);
+    // Log unfocused tasks
+    for (const unfocused of unfocusedTasks) {
+      this._logIfEnabled('unfocused', { taskId: unfocused.id, task: unfocused.name });
     }
-    this.settings.set_strv('todos', todos);
 
     // Log changes
     if (oldTask.name !== todo.name) {
-      this._log('renamed', { taskId: todo.id, oldName: oldTask.name, newName: todo.name });
+      this._logIfEnabled('renamed', { taskId: todo.id, oldName: oldTask.name, newName: todo.name });
     }
     if (oldTask.isDone !== todo.isDone) {
-      this._log(todo.isDone ? 'completed' : 'uncompleted', { taskId: todo.id, task: todo.name });
+      this._logIfEnabled(todo.isDone ? 'completed' : 'uncompleted', { taskId: todo.id, task: todo.name });
+    }
+    if (oldTask.isFocused !== todo.isFocused) {
+      this._logIfEnabled(todo.isFocused ? 'focused' : 'unfocused', { taskId: todo.id, task: todo.name });
+    }
+    if (oldTask.groupId !== todo.groupId) {
+      const oldGroup = oldTask.groupId ? this.getGroup(oldTask.groupId)?.name : 'Ungrouped';
+      const newGroup = todo.groupId ? this.getGroup(todo.groupId)?.name : 'Ungrouped';
+      this._logIfEnabled('moved_group', { taskId: todo.id, task: todo.name, details: `${oldGroup} -> ${newGroup}` });
     }
   }
 
   clearAll() {
-    this.settings.set_strv('todos', []);
-    this._log('cleared_all', {});
+    this.GSettings.set_strv(TODOS, []);
+    this._logIfEnabled('cleared_all', {});
   }
 
-  // Group methods
+  // ===== Group Methods =====
+
   getGroups(): Group[] {
-    const raw = this.settings.get_strv('groups');
-    return raw.map(g => {
+    if (this._groupsCache) return this._groupsCache;
+
+    const raw = this.GSettings.get_strv(GROUPS);
+    const groups = raw.map(g => {
       const parsed = JSON.parse(g);
       if (!parsed.version) {
-        return { version: 1, ...parsed };
+        return migrateGroup(parsed);
       }
       return parsed as Group;
     });
+    this._groupsCache = groups;
+    return groups;
   }
 
   getGroup(id: string): Group | undefined {
@@ -180,14 +260,14 @@ class TestableManager {
 
   addGroup(name: string, color: string): boolean {
     const groups = this.getGroups();
-    if (groups.length >= 10) return false;
+    if (!canAddGroup(groups.length, MAX_GROUPS)) return false;
 
     const id = `group_${Date.now()}`;
-    const newGroup: Group = { version: 1, id, name, color };
+    const newGroup: Group = { version: GROUP_VERSION, id, name, color };
     groups.push(newGroup);
 
-    this.settings.set_strv('groups', groups.map(g => JSON.stringify(g)));
-    this._log('group_created', { groupId: id, group: name });
+    this.GSettings.set_strv(GROUPS, groups.map(g => JSON.stringify(g)));
+    this._logIfEnabled('group_created', { groupId: id, group: name });
     return true;
   }
 
@@ -199,64 +279,52 @@ class TestableManager {
     const oldName = groups[index].name;
     groups[index] = { version: groups[index].version, id, name, color };
 
-    this.settings.set_strv('groups', groups.map(g => JSON.stringify(g)));
+    this.GSettings.set_strv(GROUPS, groups.map(g => JSON.stringify(g)));
     if (oldName !== name) {
-      this._log('group_renamed', { groupId: id, oldName, newName: name });
+      this._logIfEnabled('group_renamed', { groupId: id, oldName, newName: name });
     }
     return true;
   }
 
   removeGroup(id: string): boolean {
-    if (id === 'inbox') return false;
+    if (!canDeleteGroup(id)) return false;
 
     const groups = this.getGroups();
     const group = groups.find(g => g.id === id);
     if (!group) return false;
 
-    // Move tasks from this group to inbox
+    // Move tasks to inbox using pure function
     const todos = this.get();
-    const updatedTodos = todos.map(t => {
-      const task: Task = JSON.parse(t);
-      if (task.groupId === id) {
-        task.groupId = 'inbox';
-      }
-      return JSON.stringify(task);
-    });
-    this.settings.set_strv('todos', updatedTodos);
+    const updatedTodos = moveTasksToGroup(todos, id, 'inbox');
+    this.GSettings.set_strv(TODOS, updatedTodos);
 
     // Remove group
     const filtered = groups.filter(g => g.id !== id);
-    this.settings.set_strv('groups', filtered.map(g => JSON.stringify(g)));
-    this._log('group_deleted', { groupId: id, group: group.name });
+    this.GSettings.set_strv(GROUPS, filtered.map(g => JSON.stringify(g)));
+    this._logIfEnabled('group_deleted', { groupId: id, group: group.name });
     return true;
   }
 
-  // History logging (for testing)
-  private _log(action: string, data: any) {
-    this.historyLog.push({ action, data, timestamp: new Date().toISOString() });
-  }
+  // ===== Settings =====
 
-  getHistoryLog() {
-    return this.historyLog;
-  }
-
-  // Settings helpers
   getLastSelectedGroup(): string {
-    return this.settings.get_string('last-selected-group') || 'inbox';
+    return this.GSettings.get_string('last-selected-group') || 'inbox';
   }
 
   setLastSelectedGroup(groupId: string) {
-    this.settings.set_string('last-selected-group', groupId);
+    this.GSettings.set_string('last-selected-group', groupId);
   }
 }
 
 describe('TodoListManager', () => {
   let settings: MockSettings;
-  let manager: TestableManager;
+  let historyLogger: MockHistoryLogger;
+  let manager: TodoListManager;
 
   beforeEach(() => {
     settings = new MockSettings();
-    manager = new TestableManager(settings);
+    historyLogger = new MockHistoryLogger();
+    manager = new TodoListManager(settings, historyLogger);
   });
 
   describe('Task Operations', () => {
@@ -346,7 +414,6 @@ describe('TodoListManager', () => {
       manager.add('Third');
 
       const tasks = manager.getParsed();
-      // Focus the middle task (index 1)
       manager.update(1, { ...tasks[1], isFocused: true });
 
       const updated = manager.getParsed();
@@ -410,11 +477,8 @@ describe('TodoListManager', () => {
       const result = manager.removeGroup(workGroup.id);
       expect(result).toBe(true);
 
-      // Task should now be in inbox
       const tasks = manager.getParsed();
       expect(tasks[0].groupId).toBe('inbox');
-
-      // Group should be gone
       expect(manager.getGroups().length).toBe(1);
     });
   });
@@ -422,25 +486,25 @@ describe('TodoListManager', () => {
   describe('History Logging', () => {
     it('should log task added', () => {
       manager.add('New task');
-      const log = manager.getHistoryLog();
-      expect(log[0].action).toBe('added');
-      expect(log[0].data.task).toBe('New task');
+      const logs = historyLogger.getLogs();
+      expect(logs[0].action).toBe('added');
+      expect(logs[0].data.task).toBe('New task');
     });
 
     it('should log task removed', () => {
       manager.add('Task to remove');
       manager.remove(0);
 
-      const log = manager.getHistoryLog();
-      expect(log[1].action).toBe('removed');
+      const logs = historyLogger.getLogs();
+      expect(logs[1].action).toBe('removed');
     });
 
     it('should log task completed', () => {
       const task = manager.add('Complete me');
       manager.update(0, { ...task, isDone: true });
 
-      const log = manager.getHistoryLog();
-      expect(log[1].action).toBe('completed');
+      const logs = historyLogger.getLogs();
+      expect(logs[1].action).toBe('completed');
     });
 
     it('should log task uncompleted', () => {
@@ -449,24 +513,24 @@ describe('TodoListManager', () => {
       const completed = manager.getParsed()[0];
       manager.update(0, { ...completed, isDone: false });
 
-      const log = manager.getHistoryLog();
-      expect(log[2].action).toBe('uncompleted');
+      const logs = historyLogger.getLogs();
+      expect(logs[2].action).toBe('uncompleted');
     });
 
     it('should log clear all', () => {
       manager.add('Task');
       manager.clearAll();
 
-      const log = manager.getHistoryLog();
-      expect(log[1].action).toBe('cleared_all');
+      const logs = historyLogger.getLogs();
+      expect(logs[1].action).toBe('cleared_all');
     });
 
     it('should log group created', () => {
       manager.addGroup('Projects', '#123456');
 
-      const log = manager.getHistoryLog();
-      expect(log[0].action).toBe('group_created');
-      expect(log[0].data.group).toBe('Projects');
+      const logs = historyLogger.getLogs();
+      expect(logs[0].action).toBe('group_created');
+      expect(logs[0].data.group).toBe('Projects');
     });
 
     it('should log group renamed', () => {
@@ -474,10 +538,10 @@ describe('TodoListManager', () => {
       const group = manager.getGroups().find(g => g.name === 'Work')!;
       manager.updateGroup(group.id, 'Office', '#ff0000');
 
-      const log = manager.getHistoryLog();
-      expect(log[1].action).toBe('group_renamed');
-      expect(log[1].data.oldName).toBe('Work');
-      expect(log[1].data.newName).toBe('Office');
+      const logs = historyLogger.getLogs();
+      expect(logs[1].action).toBe('group_renamed');
+      expect(logs[1].data.oldName).toBe('Work');
+      expect(logs[1].data.newName).toBe('Office');
     });
 
     it('should log group deleted', () => {
@@ -485,15 +549,54 @@ describe('TodoListManager', () => {
       const group = manager.getGroups().find(g => g.name === 'Work')!;
       manager.removeGroup(group.id);
 
-      const log = manager.getHistoryLog();
-      expect(log[1].action).toBe('group_deleted');
-      expect(log[1].data.group).toBe('Work');
+      const logs = historyLogger.getLogs();
+      expect(logs[1].action).toBe('group_deleted');
+      expect(logs[1].data.group).toBe('Work');
+    });
+
+    it('should log moved_group when task group changes via update', () => {
+      manager.addGroup('Work', '#ff0000');
+      const workGroup = manager.getGroups().find(g => g.name === 'Work')!;
+
+      const task = manager.add('My task', 'inbox');
+      const originalId = task.id;
+      const storedTask = manager.getParsed()[0];
+
+      manager.update(0, { ...storedTask, groupId: workGroup.id });
+
+      const logs = historyLogger.getLogs();
+      const moveLog = logs.find(l => l.action === 'moved_group');
+      expect(moveLog).toBeDefined();
+      expect(moveLog!.data.task).toBe('My task');
+      expect(moveLog!.data.details).toBe('Inbox -> Work');
+
+      const updatedTask = manager.getParsed()[0];
+      expect(updatedTask.id).toBe(originalId);
+      expect(updatedTask.groupId).toBe(workGroup.id);
+    });
+
+    it('should preserve all task properties when changing group', () => {
+      manager.addGroup('Work', '#ff0000');
+      const workGroup = manager.getGroups().find(g => g.name === 'Work')!;
+
+      const task = manager.add('Important task', 'inbox');
+      const originalId = task.id;
+
+      manager.update(0, { ...task, isDone: true, isFocused: true });
+      const modifiedTask = manager.getParsed()[0];
+
+      manager.update(0, { ...modifiedTask, groupId: workGroup.id });
+
+      const finalTask = manager.getParsed()[0];
+      expect(finalTask.id).toBe(originalId);
+      expect(finalTask.name).toBe('Important task');
+      expect(finalTask.isDone).toBe(true);
+      expect(finalTask.groupId).toBe(workGroup.id);
     });
   });
 
   describe('Migration', () => {
     it('should migrate tasks without version', () => {
-      // Simulate old format task (no version, no id)
       settings.set_strv('todos', [JSON.stringify({
         name: 'Old task',
         isDone: false,
@@ -506,7 +609,6 @@ describe('TodoListManager', () => {
     });
 
     it('should migrate groups without version', () => {
-      // Simulate old format group
       settings.set_strv('groups', [JSON.stringify({
         id: 'inbox',
         name: 'Inbox',
@@ -551,7 +653,7 @@ describe('TodoListManager', () => {
 
     it('should handle empty task list operations gracefully', () => {
       expect(() => manager.remove(0)).not.toThrow();
-      expect(() => manager.update(0, { version: 1, id: 'x', name: 'x', isDone: false })).not.toThrow();
+      expect(() => manager.update(0, { version: 1, id: 'x', name: 'x', isDone: false } as Task)).not.toThrow();
     });
 
     it('should handle non-existent group lookup', () => {
@@ -600,15 +702,11 @@ describe('TodoListManager', () => {
       manager.addGroup('Work', '#ff0000');
       const workGroup = manager.getGroups().find(g => g.name === 'Work')!;
 
-      // Add 2 work tasks and 1 inbox task
       manager.add('Inbox task', 'inbox');
       manager.add('Work task 1', workGroup.id);
       manager.add('Work task 2', workGroup.id);
 
-      // All 3 tasks are undone
       expect(manager.getTotalUndone()).toBe(3);
-
-      // 2 in work group, 1 in inbox
       expect(manager.getTotalUndone(workGroup.id)).toBe(2);
       expect(manager.getTotalUndone('inbox')).toBe(1);
     });
@@ -627,8 +725,8 @@ describe('TodoListManager', () => {
       const task = manager.add('Original');
       manager.update(0, { ...task, name: 'Renamed' });
 
-      const log = manager.getHistoryLog();
-      const renameLog = log.find(l => l.action === 'renamed');
+      const logs = historyLogger.getLogs();
+      const renameLog = logs.find(l => l.action === 'renamed');
       expect(renameLog).toBeDefined();
       expect(renameLog?.data.oldName).toBe('Original');
       expect(renameLog?.data.newName).toBe('Renamed');
@@ -647,12 +745,11 @@ describe('TodoListManager', () => {
       const afterFirst = manager.getParsed();
       expect(afterFirst[0].isFocused).toBe(true);
 
-      // Focus another task
       manager.update(1, { ...afterFirst[1], isFocused: true });
 
       const afterSecond = manager.getParsed();
       const focusedCount = afterSecond.filter(t => t.isFocused).length;
-      // Note: current implementation doesn't auto-unfocus, but focused task moves to top
+      expect(focusedCount).toBe(1);
       expect(afterSecond[0].isFocused).toBe(true);
     });
 
@@ -663,6 +760,23 @@ describe('TodoListManager', () => {
       const tasks = manager.getParsed();
       expect(tasks.length).toBe(1);
       expect(tasks[0].isFocused).toBe(true);
+    });
+
+    it('should log unfocused when another task is focused', () => {
+      manager.add('Task 1');
+      manager.add('Task 2');
+
+      const tasks = manager.getParsed();
+      manager.update(1, { ...tasks[1], isFocused: true });
+
+      historyLogger.clear();
+
+      const afterFirst = manager.getParsed();
+      manager.update(1, { ...afterFirst[1], isFocused: true });
+
+      const logs = historyLogger.getLogs();
+      const unfocusLog = logs.find(l => l.action === 'unfocused');
+      expect(unfocusLog).toBeDefined();
     });
   });
 });

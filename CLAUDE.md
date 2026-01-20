@@ -123,6 +123,85 @@ make check         # All checks (TypeScript + ESLint + tests + verify-dist + GNO
 make check-compat  # Test TypeScript against GNOME 46 and 49 types only
 ```
 
+### Testing Architecture
+
+**The Problem:** GNOME Shell extensions use `gi://` imports (Gio, GLib, St, Clutter) that only work inside the GNOME Shell process. These cannot run in Node.js/vitest.
+
+**The Solution:** Separate pure business logic from GNOME UI code.
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    extension.ts / prefs.ts                  │
+│                    (GNOME UI - untestable)                  │
+│  - Widget creation (St.*, Gtk.*, Adw.*)                     │
+│  - Signal connections                                       │
+│  - Event handlers                                           │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ calls
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                       manager.ts                            │
+│              (Orchestration - tested via mirror)            │
+│  - Accepts SettingsLike interface (not Gio.Settings)        │
+│  - Uses pure functions from utils.ts                        │
+│  - Handles history logging decisions                        │
+└─────────────────────────┬───────────────────────────────────┘
+                          │ imports
+                          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                        utils.ts                             │
+│               (Pure functions - fully testable)             │
+│  - Task operations (move, insert, filter, group)            │
+│  - URL extraction, text formatting                          │
+│  - Validation, migrations                                   │
+│  - NO gi:// imports                                         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key Patterns:**
+
+1. **Dependency Injection** - `manager.ts` accepts `SettingsLike` interface instead of `Gio.Settings`:
+   ```typescript
+   // In production: new TodoListManager(this.getSettings())
+   // In tests: new TodoListManager(mockSettings)
+   ```
+
+2. **Pure Functions** - All business logic in `utils.ts` with no side effects:
+   ```typescript
+   // These can be tested directly
+   moveTaskToTop(todos, index, task)
+   filterTasksByGroup(tasks, groupId)
+   getPinnedTaskDisplay(tasks, enabled)
+   ```
+
+3. **Test Mirror** - `tests/manager.test.ts` has its own `TodoListManager` class that:
+   - Uses the same pure functions from `utils.ts`
+   - Provides mock `SettingsLike` implementation
+   - Tests the orchestration logic without GNOME imports
+
+4. **Edge Case Robustness** - All extracted functions handle invalid input gracefully:
+   ```typescript
+   // Returns default instead of throwing
+   rgbaToHex(null)  // → '#3584e4'
+   getPositionConfig(undefined)  // → { box: 'right', index: 0 }
+   ```
+
+**What's Testable:**
+
+| File | Testable | Why |
+|------|----------|-----|
+| `utils.ts` | ✅ 100% | Pure functions, no GNOME imports |
+| `manager.ts` | ⚠️ Via mirror | Uses utils.ts, orchestration tested indirectly |
+| `history.ts` | ⚠️ Partial | Pure logic in utils.ts, file I/O untestable |
+| `extension.ts` | ❌ ~5% | GNOME UI widgets |
+| `prefs.ts` | ❌ ~2% | GTK4 UI widgets |
+
+**Adding New Logic:**
+
+1. If it's pure computation → add to `utils.ts` with tests
+2. If it needs GSettings → use `SettingsLike` interface
+3. If it's UI → keep in extension.ts/prefs.ts (untestable)
+
 ## GNOME Shell Constraints
 - Extensions run in the shell process - avoid blocking operations
 - Use GLib.timeout_add for delays, not setTimeout

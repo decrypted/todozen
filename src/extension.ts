@@ -9,7 +9,24 @@ import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 import * as Main from "resource:///org/gnome/shell/ui/main.js";
 import { Task, TodoListManager } from "./manager.js";
-import { extractUrls, extractDomain, buttonIcon, truncateText, formatPinnedTaskForPanel, createExtensionError, formatErrorForLog, ExtensionError } from "./utils.js";
+import {
+    extractUrls,
+    extractDomain,
+    buttonIcon,
+    truncateText,
+    createExtensionError,
+    formatErrorForLog,
+    ExtensionError,
+    Group,
+    getPositionConfig,
+    getFilterLabel,
+    getGroupLabel,
+    getNextFilterGroupId,
+    getNextGroupId,
+    filterTasksByGroup,
+    groupTasksByGroupId,
+    getPinnedTaskDisplay,
+} from "./utils.js";
 import Meta from "gi://Meta";
 import Shell from "gi://Shell";
 import GLib from "gi://GLib";
@@ -79,7 +96,7 @@ export default class TodoListExtension extends Extension {
     _enableInternal() {
         this._settings = this.getSettings();
         this.button = new PanelMenu.Button(0.0, this.metadata.name, false);
-        this._manager = new TodoListManager(this);
+        this._manager = new TodoListManager(this.getSettings());
 
         // Create a box to hold count + pinned text + link icon
         this._buttonBox = new St.BoxLayout({
@@ -166,6 +183,14 @@ export default class TodoListExtension extends Extension {
             this._updateButtonText();
         });
 
+        // Initialize pinned task display (deferred to next idle to ensure widgets are realized)
+        GLib.idle_add(GLib.PRIORITY_DEFAULT_IDLE, () => {
+            if (this._manager) {
+                this._updateButtonText();
+            }
+            return GLib.SOURCE_REMOVE;
+        });
+
         this._buildPopupMenu();
         this._toggleShortcut();
 
@@ -176,8 +201,8 @@ export default class TodoListExtension extends Extension {
         });
         this._todosChangedId = this._settings.connect('changed::todos', () => {
             this._needsPopulate = true;
-            // Also update button count
-            this.buttonText?.set_text(buttonIcon(this._manager?.getTotalUndone() || 0));
+            // Update button count and pinned task display
+            this._updateButtonText();
         });
 
         // Populate todo list when menu opens (only if needed)
@@ -302,15 +327,7 @@ export default class TodoListExtension extends Extension {
 
     _getPositionConfig() {
         const position = this._settings?.get_string('panel-position') || 'right';
-        // Map position setting to panel box and index
-        const config: { [key: string]: { box: string; index: number } } = {
-            'left':         { box: 'left',   index: 0 },
-            'center-left':  { box: 'center', index: 0 },
-            'center':       { box: 'center', index: 1 },
-            'center-right': { box: 'center', index: 2 },
-            'right':        { box: 'right',  index: 0 },
-        };
-        return config[position] || config['right'];
+        return getPositionConfig(position);
     }
 
     _addToPanel() {
@@ -503,51 +520,28 @@ export default class TodoListExtension extends Extension {
 
     _getFilterLabel(): string {
         const filterGroup = this._manager?.getFilterGroup();
-        if (!filterGroup) return _("All");
-        const group = this._manager?.getGroup(filterGroup);
-        return group?.name || _("All");
+        const groups = this._manager?.getGroups() || [];
+        return getFilterLabel(filterGroup, groups);
     }
 
     _getGroupLabel(groupId: string): string {
-        const group = this._manager?.getGroup(groupId);
-        return group?.name || _("Inbox");
+        const groups = this._manager?.getGroups() || [];
+        return getGroupLabel(groupId, groups);
     }
 
     _cycleFilter() {
-        // Cycle through: All → group1 → group2 → ... → All
         const groups = this._manager?.getGroups() || [];
         const currentFilter = this._manager?.getFilterGroup() || '';
-
-        if (!currentFilter) {
-            // Currently "All", go to first group
-            if (groups.length > 0) {
-                this._manager?.setFilterGroup(groups[0].id);
-            }
-        } else {
-            // Find current group index and go to next (or wrap to All)
-            const currentIndex = groups.findIndex(g => g.id === currentFilter);
-            if (currentIndex === -1 || currentIndex === groups.length - 1) {
-                // Not found or last group, go to All
-                this._manager?.setFilterGroup('');
-            } else {
-                // Go to next group
-                this._manager?.setFilterGroup(groups[currentIndex + 1].id);
-            }
-        }
-
+        const nextFilter = getNextFilterGroupId(currentFilter, groups);
+        this._manager?.setFilterGroup(nextFilter);
         this._updateFilterLabel();
         this._populate(true);
     }
 
     _cycleGroup() {
-        // Cycle through groups for new task assignment
         const groups = this._manager?.getGroups() || [];
         if (groups.length === 0) return;
-
-        const currentIndex = groups.findIndex(g => g.id === this._selectedGroupId);
-        const nextIndex = (currentIndex + 1) % groups.length;
-
-        this._selectedGroupId = groups[nextIndex].id;
+        this._selectedGroupId = getNextGroupId(this._selectedGroupId, groups);
         this._manager?.setLastSelectedGroup(this._selectedGroupId);
         this._updateGroupLabel();
     }
@@ -577,9 +571,7 @@ export default class TodoListExtension extends Extension {
         const groups = this._manager?.getGroups() || [];
 
         // Filter tasks if a filter is set
-        const filteredTasks = filterGroup
-            ? todos.filter(t => t.groupId === filterGroup)
-            : todos;
+        const filteredTasks = filterTasksByGroup(todos, filterGroup);
 
         if (!filteredTasks.length) {
             const item = new St.Label({
@@ -595,15 +587,8 @@ export default class TodoListExtension extends Extension {
             return;
         }
 
-        // Group tasks by groupId
-        const tasksByGroup = new Map<string, { task: Task; index: number }[]>();
-        todos.forEach((task, index) => {
-            const groupId = task.groupId || 'inbox';
-            if (!tasksByGroup.has(groupId)) {
-                tasksByGroup.set(groupId, []);
-            }
-            tasksByGroup.get(groupId)!.push({ task, index });
-        });
+        // Group tasks by groupId (preserving original indices)
+        const tasksByGroup = groupTasksByGroupId(todos);
 
         let totalUndone = 0;
 
@@ -641,7 +626,7 @@ export default class TodoListExtension extends Extension {
         }
     }
 
-    _createGroupHeader(group: { id: string; name: string; color: string }, taskCount: number, isExpanded: boolean): St.BoxLayout {
+    _createGroupHeader(group: Group, taskCount: number, isExpanded: boolean): St.BoxLayout {
         const header = new St.BoxLayout({
             vertical: false,
             style: `padding: 8px 12px; background-color: ${group.color}22; border-left: 3px solid ${group.color};`,
@@ -686,7 +671,7 @@ export default class TodoListExtension extends Extension {
         const index = todos.findIndex(t => t.id === taskId);
         if (index !== -1) {
             const task = todos[index];
-            this._manager?.update(index, { ...task, name: newName });
+            this._manager?.update(index, { ...task, name: newName, groupId: this._selectedGroupId });
         }
     }
 
@@ -930,46 +915,23 @@ export default class TodoListExtension extends Extension {
         // Set count text
         this.buttonText?.clutterText.set_text(buttonIcon(count));
 
-        // Handle pinned task display
-        if (this._showPinnedInPanel) {
-            const tasks = this._manager?.getParsed() || [];
-            const pinnedTask = tasks.find(t => t.isFocused && !t.isDone);
+        // Handle pinned task display using extracted pure function
+        const tasks = this._manager?.getParsed() || [];
+        const { labelText, url } = getPinnedTaskDisplay(tasks, this._showPinnedInPanel);
 
-            if (pinnedTask) {
-                const { text: pinnedText, url } = formatPinnedTaskForPanel(pinnedTask.name);
-                this._pinnedUrl = url;
+        this._pinnedUrl = url;
 
-                // Show pinned text if available, otherwise show pin indicator
-                if (pinnedText) {
-                    this._pinnedLabel?.set_text(pinnedText);
-                    this._pinnedLabel?.show();
-                } else if (url) {
-                    // URL-only task: show small indicator
-                    this._pinnedLabel?.set_text('📌');
-                    this._pinnedLabel?.show();
-                } else {
-                    // Empty/whitespace task: show pin indicator
-                    this._pinnedLabel?.set_text('📌');
-                    this._pinnedLabel?.show();
-                }
-
-                // Show link button if there's a URL
-                if (url) {
-                    this._pinnedLinkBtn?.show();
-                } else {
-                    this._pinnedLinkBtn?.hide();
-                }
-            } else {
-                // No pinned task
-                this._pinnedLabel?.hide();
-                this._pinnedLinkBtn?.hide();
-                this._pinnedUrl = null;
-            }
+        if (labelText) {
+            this._pinnedLabel?.set_text(labelText);
+            this._pinnedLabel?.show();
         } else {
-            // Feature disabled
             this._pinnedLabel?.hide();
+        }
+
+        if (url) {
+            this._pinnedLinkBtn?.show();
+        } else {
             this._pinnedLinkBtn?.hide();
-            this._pinnedUrl = null;
         }
     }
 
@@ -994,6 +956,10 @@ export default class TodoListExtension extends Extension {
     _renameTask(task: Task, _index: number) {
         // Store the task ID being edited (task stays in list)
         this._editingTaskId = task.id;
+
+        // Set dropdown to task's current group
+        this._selectedGroupId = task.groupId || 'inbox';
+        this._updateGroupLabel();
 
         // Put the task text in the input field
         this.input?.set_text(task.name);
